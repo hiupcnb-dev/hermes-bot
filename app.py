@@ -9,7 +9,7 @@ import threading
 import datetime
 from io import BytesIO
 import requests
-from flask import Flask, jsonify
+from flask import Flask, request, jsonify
 
 try:
     import pypdf
@@ -35,6 +35,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-n7hCiWdN4Tok6tDSBg7WEvqbZmqhBMq
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://apithat.dev/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3.7-flash")
 ALLOWED_USERS_RAW = os.getenv("TELEGRAM_ALLOWED_USERS", "8322961603")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://hermes-bot-drl1.onrender.com")
 
 ALLOWED_USERS = set()
 for uid in ALLOWED_USERS_RAW.split(","):
@@ -50,7 +51,7 @@ user_memories = {}  # {chat_id: ["sở thích...", "dự án..."]}
 pending_reminders = []  # [{"chat_id": int, "due_time": float, "text": str}]
 MAX_HISTORY_TURNS = 20
 
-# Flask web app for Render health checks
+# Flask web app for Render Webhook & Health Checks
 app = Flask(__name__)
 
 @app.route("/")
@@ -58,12 +59,65 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot (Vision + Files + Search + Reminders)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Webhook + Anti-Sleep Edition)",
         "model": MODEL_NAME,
-        "features": ["vision_multimodal", "file_reader", "live_web_search", "reminders_and_memory"],
+        "features": ["vision_multimodal", "file_reader", "live_web_search", "reminders_and_memory", "webhook_push"],
         "pending_reminders_count": len(pending_reminders),
         "timestamp": time.time()
     }), 200
+
+# ==========================================================
+# Feature: Telegram Webhook (Instant Push & Zero Sleep)
+# ==========================================================
+
+@app.route("/webhook", methods=["POST"])
+def telegram_webhook():
+    """Telegram pushes updates here via HTTPS Webhook"""
+    update = request.get_json(force=True, silent=True)
+    if update:
+        # Process in separate background worker thread so Telegram gets instant 200 OK
+        threading.Thread(target=handle_update, args=(update,), daemon=True).start()
+    return jsonify({"ok": True}), 200
+
+@app.route("/setup-webhook")
+def setup_webhook_route():
+    webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/webhook"
+    res = send_telegram_request("setWebhook", {
+        "url": webhook_url,
+        "drop_pending_updates": False
+    })
+    return jsonify({
+        "webhook_url": webhook_url,
+        "telegram_response": res
+    }), 200
+
+def auto_setup_webhook():
+    """Register Webhook on startup after 5 seconds"""
+    time.sleep(5)
+    webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/webhook"
+    logger.info(f"Setting Telegram Webhook to {webhook_url}...")
+    res = send_telegram_request("setWebhook", {
+        "url": webhook_url,
+        "drop_pending_updates": False
+    })
+    logger.info(f"Webhook setup result: {res}")
+
+# ==========================================================
+# Anti-Sleep Keep-Alive Loop (Self-Ping every 9 mins)
+# ==========================================================
+
+def anti_sleep_keep_alive():
+    """Pings self every 9 minutes so Render Free Tier NEVER sleeps"""
+    logger.info("Anti-Sleep Keep-Alive loop started.")
+    time.sleep(30)
+    while True:
+        try:
+            url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/health"
+            r = requests.get(url, timeout=15)
+            logger.info(f"Keep-Alive ping to {url}: Status {r.status_code}")
+        except Exception as e:
+            logger.warning(f"Keep-Alive ping error: {e}")
+        time.sleep(9 * 60) # Ping every 9 minutes (Render timeout is 15 mins)
 
 # ==========================================================
 # Telegram API Helpers
@@ -110,7 +164,7 @@ def download_telegram_file(file_id):
 # ==========================================================
 
 def search_web_ddg(query, max_results=4):
-    """Perform real-time web search via DuckDuckGo HTML scraper (zero token/auth required)"""
+    """Perform real-time web search via DuckDuckGo HTML scraper"""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -121,7 +175,6 @@ def search_web_ddg(query, max_results=4):
         if r.status_code != 200:
             return ""
         
-        # Simple regex extraction for snippets
         results = []
         snippets = re.findall(r'<a class="result__snippet[^>]*>(.*?)</a>', r.text, re.DOTALL)
         titles = re.findall(r'<a class="result__url[^>]*>(.*?)</a>', r.text, re.DOTALL)
@@ -151,13 +204,6 @@ def should_search_web(query):
 # ==========================================================
 
 def parse_reminder(text):
-    """
-    Detect reminder requests like:
-    'nhắc tôi sau 10 phút xem phim'
-    'nhắc anh sau 1 tiếng họp'
-    'nhắc tôi lúc 20:30 ăn cơm'
-    Returns (due_timestamp, reminder_text) or None
-    """
     text_lower = text.lower()
     now = time.time()
     
@@ -183,7 +229,6 @@ def parse_reminder(text):
         minute = int(time_match.group(2))
         remind_content = time_match.group(3).strip()
         
-        # Calculate target today or tomorrow (UTC+7 Vietnam)
         now_dt = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
         target_dt = now_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if target_dt.timestamp() <= now:
@@ -213,10 +258,6 @@ def reminder_scheduler_loop():
             logger.error(f"Error in reminder scheduler: {e}")
         time.sleep(5)
 
-# Start background scheduler
-reminder_thread = threading.Thread(target=reminder_scheduler_loop, daemon=True)
-reminder_thread.start()
-
 # ==========================================================
 # Feature 5: File & Document Extraction
 # ==========================================================
@@ -230,9 +271,9 @@ def extract_text_from_file(file_bytes, file_name):
             try:
                 reader = pypdf.PdfReader(BytesIO(file_bytes))
                 text = ""
-                for page in reader.pages[:20]: # Read up to 20 pages
+                for page in reader.pages[:20]:
                     text += page.extract_text() or ""
-                return text[:15000] # Return up to 15k chars
+                return text[:15000]
             except Exception as e:
                 return f"[Lỗi đọc file PDF: {e}]"
         return "[Thư viện pypdf chưa sẵn sàng]"
@@ -246,26 +287,22 @@ def extract_text_from_file(file_bytes, file_name):
                 return f"[Lỗi đọc file Word: {e}]"
         return "[Thư viện python-docx chưa sẵn sàng]"
         
-    else: # Code & Plain text files (.py, .txt, .json, .java, .js, .html, .css, .md, .sql...)
+    else:
         try:
             return file_bytes.decode("utf-8", errors="replace")[:20000]
         except Exception as e:
             return f"[Không thể đọc text: {e}]"
 
 # ==========================================================
-# Core LLM Calling Engine
+# Core LLM Engine
 # ==========================================================
 
 def query_llm(chat_id, user_content, is_multimodal=False):
-    """
-    user_content can be a string (text) or a list of blocks (multimodal vision)
-    """
     system_prompt = (
         "Bạn là Hermes - trợ lý AI toàn năng, thông minh, hỗ trợ tận tâm bằng tiếng Việt chuẩn Markdown.\n"
         "Bạn có khả năng: phân tích hình ảnh, đọc tài liệu/code, tìm kiếm thông tin mới nhất và đặt lịch nhắc nhở."
     )
     
-    # Inject saved memories if any
     if chat_id in user_memories and user_memories[chat_id]:
         mem_str = "\n".join([f"- {m}" for m in user_memories[chat_id]])
         system_prompt += f"\n\nThông tin đã ghi nhớ về người dùng:\n{mem_str}"
@@ -275,10 +312,8 @@ def query_llm(chat_id, user_content, is_multimodal=False):
     else:
         conversation_history[chat_id][0] = {"role": "system", "content": system_prompt}
 
-    # Append user turn
     conversation_history[chat_id].append({"role": "user", "content": user_content})
 
-    # Trim history
     if len(conversation_history[chat_id]) > (MAX_HISTORY_TURNS * 2 + 1):
         sys_msg = conversation_history[chat_id][0]
         recent = conversation_history[chat_id][-(MAX_HISTORY_TURNS * 2):]
@@ -330,7 +365,6 @@ def handle_update(update):
     user_id = message.get("from", {}).get("id")
     message_id = message.get("message_id")
 
-    # Security check
     if ALLOWED_USERS and user_id not in ALLOWED_USERS and chat_id not in ALLOWED_USERS:
         logger.warning(f"Unauthorized access by {user_id}")
         send_message(chat_id, "⛔ Bạn không có quyền sử dụng bot cá nhân này.")
@@ -341,11 +375,11 @@ def handle_update(update):
     photos = message.get("photo")
     document = message.get("document")
 
-    # --- Command: /start ---
+    # Command: /start
     if text == "/start":
         welcome = (
-            "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Cloud 24/7)!**\n\n"
-            "✨ **Em đã được kích hoạt đầy đủ các tính năng:**\n"
+            "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Cloud 24/7 - Webhook Edition)!**\n\n"
+            "✨ **Em đã được kích hoạt chạy 24/7 vĩnh viễn không bao giờ ngủ:**\n"
             "1. 👁️ **Mắt thần nhìn ảnh:** Gửi ảnh đề bài, ảnh lỗi màn hình, sản phẩm để em phân tích.\n"
             "2. 📄 **Đọc file tài liệu:** Gửi file PDF, Word, file code (.py, .java, .txt...) để em đọc và tóm tắt.\n"
             "3. 🌐 **Tìm kiếm Web trực tiếp:** Tự động tra cứu tin tức, giá cả, thời tiết theo thời gian thực.\n"
@@ -354,28 +388,26 @@ def handle_update(update):
         send_message(chat_id, welcome, reply_to_message_id=message_id)
         return
 
-    # --- Command: /reset ---
+    # Command: /reset
     if text == "/reset":
         conversation_history.pop(chat_id, None)
         send_message(chat_id, "🔄 Đã làm mới lịch sử cuộc trò chuyện!", reply_to_message_id=message_id)
         return
 
-    # --- Command: /memo (Xem các thông tin đã ghi nhớ) ---
+    # Command: /memo
     if text == "/memo":
         mems = user_memories.get(chat_id, [])
         if mems:
             msg = "🧠 **Các thông tin Hermes đang ghi nhớ về anh:**\n" + "\n".join([f"- {m}" for m in mems])
         else:
-            msg = "🧠 Hiện tại em chưa lưu thông tin ghi nhớ nào. Anh có thể nói: *'Hãy nhớ rằng tôi là lập trình viên Java'*"
+            msg = "🧠 Hiện tại em chưa lưu thông tin ghi nhớ nào. Anh có thể nói: *'Hãy nhớ rằng tôi là lập trình viên'*."
         send_message(chat_id, msg, reply_to_message_id=message_id)
         return
 
-    # ======================================================
-    # Case A: User sends a PHOTO (Vision Multimodal)
-    # ======================================================
+    # Case A: Photo (Vision)
     if photos:
         send_chat_action(chat_id, "typing")
-        best_photo = photos[-1] # Highest resolution
+        best_photo = photos[-1]
         photo_bytes, _ = download_telegram_file(best_photo["file_id"])
         
         if photo_bytes:
@@ -393,9 +425,7 @@ def handle_update(update):
             send_message(chat_id, "⚠️ Không thể tải ảnh từ Telegram, anh thử gửi lại nhé!", reply_to_message_id=message_id)
         return
 
-    # ======================================================
-    # Case B: User sends a DOCUMENT (.pdf, .docx, code, text)
-    # ======================================================
+    # Case B: Document
     if document:
         send_chat_action(chat_id, "typing")
         doc_file_id = document.get("file_id")
@@ -418,13 +448,11 @@ def handle_update(update):
             send_message(chat_id, f"⚠️ Không thể tải file `{file_name}`, anh gửi lại nhé!", reply_to_message_id=message_id)
         return
 
-    # ======================================================
-    # Case C: TEXT Message
-    # ======================================================
+    # Case C: Text
     if not text:
         return
 
-    # --- Check for Memory storage intent ---
+    # Memory intent
     mem_match = re.search(r'^(?:hãy\s+)?nhớ\s+(?:rằng|là|cho\s+tôi|giúp\s+tôi)?\s*(.+)', text, re.IGNORECASE)
     if mem_match and not any(kw in text.lower() for kw in ["sau", "lúc", "giờ", "phút"]):
         mem_fact = mem_match.group(1).strip()
@@ -434,7 +462,7 @@ def handle_update(update):
         send_message(chat_id, f"🧠 **Đã ghi nhớ:** \"{mem_fact}\"\nEm sẽ luôn nhớ thông tin này trong các câu trả lời sau!", reply_to_message_id=message_id)
         return
 
-    # --- Check for Reminder intent ---
+    # Reminder intent
     remind_parsed = parse_reminder(text)
     if remind_parsed:
         due_time, remind_content = remind_parsed
@@ -452,11 +480,11 @@ def handle_update(update):
         )
         return
 
-    # --- Check for Web Search trigger ---
+    # Web search
     send_chat_action(chat_id, "typing")
     user_query = text
     if should_search_web(text):
-        logger.info(f"Triggering Web Search for query: {text}")
+        logger.info(f"Triggering Web Search for: {text}")
         search_results = search_web_ddg(text)
         if search_results:
             user_query = (
@@ -469,38 +497,20 @@ def handle_update(update):
     send_message(chat_id, reply, reply_to_message_id=message_id)
 
 # ==========================================================
-# Background Telegram Polling Loop
+# Background Threads (Scheduler + Keep-Alive + Webhook Setup)
 # ==========================================================
 
-def telegram_polling_loop():
-    logger.info("Starting Telegram Polling Loop with Vision, Files, Search & Reminders...")
-    offset = 0
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-            params = {"offset": offset, "timeout": 30}
-            r = requests.get(url, params=params, timeout=40)
-            if r.status_code == 200:
-                data = r.json()
-                if data.get("ok"):
-                    for update in data.get("result", []):
-                        offset = update["update_id"] + 1
-                        try:
-                            handle_update(update)
-                        except Exception as e:
-                            logger.error(f"Error handling update: {e}", exc_info=True)
-            elif r.status_code == 409:
-                logger.warning("Conflict: Another bot instance is polling. Waiting 10s...")
-                time.sleep(10)
-            else:
-                time.sleep(3)
-        except Exception as e:
-            logger.error(f"Polling loop error: {e}")
-            time.sleep(5)
+# 1. Reminder scheduler thread
+reminder_thread = threading.Thread(target=reminder_scheduler_loop, daemon=True)
+reminder_thread.start()
 
-# Start Polling
-bot_thread = threading.Thread(target=telegram_polling_loop, daemon=True)
-bot_thread.start()
+# 2. Anti-Sleep Keep-Alive thread
+keep_alive_thread = threading.Thread(target=anti_sleep_keep_alive, daemon=True)
+keep_alive_thread.start()
+
+# 3. Webhook auto-setup thread
+webhook_setup_thread = threading.Thread(target=auto_setup_webhook, daemon=True)
+webhook_setup_thread.start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
