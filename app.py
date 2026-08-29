@@ -43,7 +43,16 @@ for uid in ALLOWED_USERS_RAW.split(","):
     if uid.isdigit():
         ALLOWED_USERS.add(int(uid))
 
-FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash", "gpt-5.4-mini", "grok-4.5"]
+# Comprehensive fallback pool of proven working models
+FALLBACK_MODELS = [
+    "gemini-3.7-flash", 
+    "gemini-3.6-flash", 
+    "gpt-5.4-mini", 
+    "claude-sonnet-4-6", 
+    "grok-4.5", 
+    "gpt-5.3-codex-spark", 
+    "gemini-3.5-flash"
+]
 
 # In-memory data structures
 conversation_history = {}
@@ -59,9 +68,9 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Long Polling + Anti-Sleep Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Multi-Model Resilient Edition)",
         "model": MODEL_NAME,
-        "features": ["vision_multimodal", "file_reader", "live_web_search", "reminders_and_memory", "24_7_long_polling"],
+        "features": ["vision_multimodal", "file_reader", "live_web_search", "reminders_and_memory", "24_7_long_polling", "auto_retry_failover"],
         "pending_reminders_count": len(pending_reminders),
         "timestamp": time.time()
     }), 200
@@ -253,7 +262,7 @@ def extract_text_from_file(file_bytes, file_name):
             return f"[Không thể đọc text: {e}]"
 
 # ==========================================================
-# Core LLM Engine
+# Core Resilient LLM Engine (Auto-Retry & Failover)
 # ==========================================================
 
 def query_llm(chat_id, user_content, is_multimodal=False):
@@ -283,32 +292,40 @@ def query_llm(chat_id, user_content, is_multimodal=False):
         "Content-Type": "application/json"
     }
 
+    # Build prioritized model list without duplicates
     models_to_try = [MODEL_NAME] + [m for m in FALLBACK_MODELS if m != MODEL_NAME]
     last_error = ""
 
     for model in models_to_try:
-        try:
-            payload = {
-                "model": model,
-                "messages": conversation_history[chat_id],
-                "temperature": 0.7
-            }
-            url = f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions"
-            r = requests.post(url, headers=headers, json=payload, timeout=60)
-            
-            if r.status_code == 200:
-                data = r.json()
-                assistant_reply = data["choices"][0]["message"]["content"]
-                conversation_history[chat_id].append({"role": "assistant", "content": assistant_reply})
-                return assistant_reply
-            else:
-                last_error = f"HTTP {r.status_code}: {r.text}"
-                logger.warning(f"Model {model} failed: {last_error}")
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"Model {model} error: {last_error}")
+        for attempt in range(2): # 2 attempts per model
+            try:
+                payload = {
+                    "model": model,
+                    "messages": conversation_history[chat_id],
+                    "temperature": 0.7
+                }
+                url = f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions"
+                r = requests.post(url, headers=headers, json=payload, timeout=60)
+                
+                if r.status_code == 200:
+                    data = r.json()
+                    assistant_reply = data["choices"][0]["message"]["content"]
+                    conversation_history[chat_id].append({"role": "assistant", "content": assistant_reply})
+                    return assistant_reply
+                elif r.status_code in [503, 502, 504, 429]:
+                    last_error = f"HTTP {r.status_code} ({model})"
+                    logger.warning(f"Model {model} busy (attempt {attempt+1}): {r.text[:100]}. Retrying...")
+                    time.sleep(1.5)
+                else:
+                    last_error = f"HTTP {r.status_code} ({model})"
+                    logger.warning(f"Model {model} failed: {r.text[:100]}")
+                    break # Try next model
+            except Exception as e:
+                last_error = f"{type(e).__name__} ({model})"
+                logger.warning(f"Model {model} error: {e}")
+                time.sleep(1)
 
-    return f"⚠️ Lỗi kết nối mô hình: {last_error}"
+    return "⚠️ Máy chủ AI đang có lưu lượng truy cập cao đột biến trong giây lát. Em đã thử kết nối lại, anh vui lòng nhắn lại giúp em sau vài giây nhé!"
 
 # ==========================================================
 # Telegram Update Handler
@@ -461,7 +478,6 @@ def handle_update(update):
 
 def cloud_polling_loop():
     logger.info("Starting Cloud Long Polling Loop...")
-    # First, make sure webhook is removed so polling works seamlessly
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
