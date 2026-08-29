@@ -67,7 +67,7 @@ def health_check():
     }), 200
 
 # ==========================================================
-# Feature: Telegram Webhook (Instant Push & Zero Sleep)
+# Feature: Telegram Webhook (Direct & Synchronous)
 # ==========================================================
 
 @app.route("/webhook", methods=["POST"])
@@ -75,8 +75,11 @@ def telegram_webhook():
     """Telegram pushes updates here via HTTPS Webhook"""
     update = request.get_json(force=True, silent=True)
     if update:
-        # Process in separate background worker thread so Telegram gets instant 200 OK
-        threading.Thread(target=handle_update, args=(update,), daemon=True).start()
+        logger.info(f"Webhook received update: {update.get('update_id')}")
+        try:
+            handle_update(update)
+        except Exception as e:
+            logger.error(f"Error executing handle_update: {e}", exc_info=True)
     return jsonify({"ok": True}), 200
 
 @app.route("/setup-webhook")
@@ -92,8 +95,8 @@ def setup_webhook_route():
     }), 200
 
 def auto_setup_webhook():
-    """Register Webhook on startup after 5 seconds"""
-    time.sleep(5)
+    """Register Webhook on startup after 3 seconds"""
+    time.sleep(3)
     webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/webhook"
     logger.info(f"Setting Telegram Webhook to {webhook_url}...")
     res = send_telegram_request("setWebhook", {
@@ -103,13 +106,13 @@ def auto_setup_webhook():
     logger.info(f"Webhook setup result: {res}")
 
 # ==========================================================
-# Anti-Sleep Keep-Alive Loop (Self-Ping every 9 mins)
+# Anti-Sleep Keep-Alive Loop (Self-Ping every 5 mins)
 # ==========================================================
 
 def anti_sleep_keep_alive():
-    """Pings self every 9 minutes so Render Free Tier NEVER sleeps"""
+    """Pings self every 5 minutes so Render Free Tier NEVER sleeps"""
     logger.info("Anti-Sleep Keep-Alive loop started.")
-    time.sleep(30)
+    time.sleep(15)
     while True:
         try:
             url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/health"
@@ -117,7 +120,7 @@ def anti_sleep_keep_alive():
             logger.info(f"Keep-Alive ping to {url}: Status {r.status_code}")
         except Exception as e:
             logger.warning(f"Keep-Alive ping error: {e}")
-        time.sleep(9 * 60) # Ping every 9 minutes (Render timeout is 15 mins)
+        time.sleep(5 * 60) # Ping every 5 minutes
 
 # ==========================================================
 # Telegram API Helpers
