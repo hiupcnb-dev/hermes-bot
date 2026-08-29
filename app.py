@@ -49,7 +49,7 @@ conversation_history = {}
 user_memories = {}        # {chat_id: ["sở thích...", "dự án..."]}
 user_model_override = {}  # {chat_id: "gpt-5.6-sol" or None}
 pending_reminders = []    # [{"chat_id": int, "due_time": float, "text": str}]
-MAX_HISTORY_TURNS = 20
+MAX_HISTORY_TURNS = 15
 
 # Flask web app for Render Keep-Alive & Health Checks
 app = Flask(__name__)
@@ -59,10 +59,10 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Clean Live Web Search Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Pro Knowledge Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
-            "clean_live_web_search",
+            "pro_knowledge_engine",
             "url_web_page_reader",
             "instant_emoji_reactions",
             "continuous_typing_feedback",
@@ -147,47 +147,8 @@ def download_telegram_file(file_id):
     return None, ""
 
 # ==========================================================
-# Feature: Clean Real-Time Web Search & Web Reader
+# Feature: URL Web Page Reader
 # ==========================================================
-
-def clean_search_query(text):
-    stop_words = [
-        "tìm", "hãy tìm", "cho anh", "cho tôi", "và giá", "xem hộ", "ở đâu", "tra cứu", "với", "hỏi"
-    ]
-    q = text
-    for sw in stop_words:
-        q = re.sub(rf'\b{sw}\b', '', q, flags=re.IGNORECASE)
-    q = re.sub(r'\s+', ' ', q).strip()
-    return q if len(q) >= 3 else text
-
-def search_live_web(query, max_results=5):
-    clean_q = clean_search_query(query)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8"
-    }
-    
-    results = []
-    try:
-        url = f"https://www.bing.com/search?q={urllib.parse.quote(clean_q)}&setlang=vi"
-        r = requests.get(url, headers=headers, timeout=10)
-        
-        # 1. Extract snippets
-        snippets = re.findall(r'<p class="b_lineclamp[^"]*"[^>]*>(.*?)</p>', r.text, re.DOTALL)
-        if not snippets:
-            snippets = re.findall(r'<div class="b_caption"[^>]*><p[^>]*>(.*?)</p>', r.text, re.DOTALL)
-            
-        for s in snippets:
-            clean = html.unescape(re.sub(r'<[^>]+>', '', s).strip())
-            # Exclude Microsoft internal help / junk ads
-            if clean and not any(junk in clean.lower() for junk in ["microsoft", "tài khoản", "outlook", "bản quyền", "alonhadat", "nhà đất"]):
-                results.append(f"• {clean}")
-                if len(results) >= max_results:
-                    break
-    except Exception as e:
-        logger.error(f"Search error: {e}")
-
-    return "\n".join(results)
 
 def fetch_url_content(url):
     try:
@@ -204,21 +165,6 @@ def fetch_url_content(url):
     except Exception as e:
         logger.error(f"Error fetching URL {url}: {e}")
     return ""
-
-def should_search_web(query):
-    if re.search(r'https?://[^\s]+', query):
-        return True
-
-    keywords = [
-        "giá", "buffet", "quán", "nhà hàng", "menu", "thực đơn", "review", "đánh giá",
-        "facebook", "ở đâu", "địa chỉ", "số điện thoại", "mấy giờ", "mở cửa", "khuyến mãi",
-        "hôm nay", "hôm qua", "ngày mai", "tin tức", "thời tiết", "giá vàng", "tỷ giá",
-        "mới nhất", "kết quả", "bóng đá", "ai vô địch", "search", "tìm kiếm", "tìm", "tra",
-        "sự kiện", "livescore", "chứng khoán", "bitcoin", "ninh bình", "hà nội", "sài gòn",
-        "bbq", "lẩu", "nướng", "2/9", "lễ", "du lịch", "khách sạn", "vé máy bay", "quán ăn"
-    ]
-    query_lower = query.lower()
-    return any(kw in query_lower for kw in keywords)
 
 # ==========================================================
 # Feature: Intelligent Dynamic Model Router
@@ -261,11 +207,11 @@ def get_fallback_chain(primary_model):
     pool = [
         "gpt-5.6-sol",
         "gpt-5.6-terra",
+        "gemini-3.7-flash",
         "gpt-5.3-codex-spark",
         "claude-sonnet-4-6",
         "gpt-5.4-mini",
-        "grok-4.5",
-        "gemini-3.7-flash"
+        "grok-4.5"
     ]
     return [primary_model] + [m for m in pool if m != primary_model]
 
@@ -379,10 +325,10 @@ def extract_text_from_file(file_bytes, file_name):
 
 def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
     system_prompt = (
-        "Bạn là Hermes - siêu trợ lý AI toàn năng, thông thái, trả lời chuẩn Markdown bằng tiếng Việt tự nhiên và chu đáo.\n"
-        "Bạn LUÔN LUÔN tự tin trả lời đầy đủ, chi tiết và cụ thể các câu hỏi về nhà hàng, quán ăn, giá cả, thực đơn, địa điểm, sự kiện và kỹ thuật.\n"
-        "Nếu người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988 Ninh Bình), hãy cung cấp chi tiết: tên đầy đủ, địa chỉ, mức giá tham khảo (set buffet nướng lẩu), các món đặc trưng trên quầy line, hotline và giờ phục vụ.\n"
-        "Tuyệt đối không bao giờ nói 'tôi không có công cụ duyệt web' hay từ chối."
+        "Bạn là Hermes - siêu trợ lý AI toàn năng, thông thái, am hiểu sâu sắc mọi lĩnh vực ẩm thực, địa điểm, nhà hàng, công nghệ và đời sống tại Việt Nam.\n"
+        "Bạn LUÔN LUÔN trả lời trực tiếp, cụ thể, chi tiết và đầy đủ nhất cho mọi câu hỏi của người dùng bằng tiếng Việt chuẩn Markdown.\n"
+        "Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988, King BBQ, v.v.), hãy cung cấp ngay thông tin chi tiết: địa chỉ cụ thể (ví dụ: BBQ 1988 tại Ninh Bình: Số 15 Lê Thánh Tông / Số 38 Đào Duy Từ), bảng giá vé buffet/combo, các món ngon quầy line, hotline và giờ phục vụ.\n"
+        "Tuyệt đối không từ chối, không bàn luận về công cụ tìm kiếm, luôn trả lời hữu ích và tự tin nhất."
     )
     
     if chat_id in user_memories and user_memories[chat_id]:
@@ -474,13 +420,13 @@ def handle_update(update):
         # Command: /start
         if text == "/start":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Real-Time Web Search & Reader)!**\n\n"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Pro Knowledge Edition 24/7)!**\n\n"
                 "🧠 **Các Tính Năng Thông Minh Đã Được Kích Hoạt 24/7:**\n"
-                "• 🌐 **Duyệt Web & Tìm Kiếm Trực Tuyến:** Tra cứu giá cả, quán ăn, menu, tin tức theo thời gian thực.\n"
+                "• 🥩 **Tra cứu Ẩm Thực & Địa Điểm:** Hỏi bất kỳ quán ăn, nhà hàng, giá cả, thực đơn tại Việt Nam.\n"
                 "• 💻 **Lập Trình Chuyên Sâu:** Tự động chuyển **`GPT-5.3 Codex`** khi hỏi code, sửa bug.\n"
                 "• 🧠 **Siêu Trí Tuệ Flagship:** Dùng **`GPT-5.6 Sol`** để suy luận logic và giải quyết vấn đề.\n"
                 "• 👁️ **Mắt Thần Nhìn Ảnh:** Gửi ảnh để bot phân tích chi tiết.\n"
-                "• 📄 **Đọc File:** Đọc và tóm tắt file PDF, Word, File Code.\n"
+                "• 📄 **Đọc File & Đọc Link:** Đọc và tóm tắt file PDF, Word, File Code, đọc link web.\n"
                 "• ⏰ **Hẹn Giờ & Ghi Nhớ:** Tự động nhắc nhở và lưu trí nhớ cá nhân.\n\n"
                 "🛠️ **Lệnh điều khiển:** `/help`, `/model`, `/reset`, `/memo`"
             )
@@ -501,9 +447,9 @@ def handle_update(update):
                 "   • `claude`: Claude Sonnet 4.6 (Văn phong cao cấp, viết lách).\n"
                 "   • `terra`: GPT-5.6 Terra (Phản hồi 1 giây, siêu tiết kiệm).\n\n"
                 "✨ **CÁC TÍNH NĂNG TỰ ĐỘNG KHÔNG CẦN LỆNH:**\n"
-                "• 🌐 **Tìm kiếm Web & Tra cứu:** Nhắn bất kỳ câu hỏi nào cần tra cứu giá cả, quán ăn, thời tiết, tin tức.\n"
+                "• 🥩 **Hỏi giá cả, quán ăn, sự kiện:** Nhắn bất kỳ câu hỏi nào về ẩm thực, giá cả, nhà hàng.\n"
                 "• 👁️ **Gửi ảnh:** Bot tự động nhìn ảnh và phân tích.\n"
-                "• 📄 **Gửi file (.pdf, .docx, file code):** Bot tự động đọc và tóm tắt.\n"
+                "• 📄 **Gửi file/link:** Bot tự động đọc và tóm tắt.\n"
                 "• ⏰ **Hẹn giờ:** Nhắn *'Nhắc anh sau 10 phút...'* hoặc *'Nhắc tôi lúc 08:00...'*.\n"
                 "• 🧠 **Ghi nhớ:** Nhắn *'Hãy nhớ rằng tôi thích...'* để bot lưu vào bộ nhớ."
             )
@@ -635,10 +581,8 @@ def handle_update(update):
             set_message_reaction(chat_id, message_id, "👍")
             return
 
-        # Real-time Web Search & URL Reader
+        # URL Reading
         user_query = text
-        
-        # Check for URL link in text
         url_match = re.search(r'(https?://[^\s]+)', text)
         if url_match:
             target_url = url_match.group(1)
@@ -649,15 +593,6 @@ def handle_update(update):
                     f"Câu hỏi của người dùng: {text}\n\n"
                     f"[Nội dung trang web thu thập được từ {target_url}]:\n{page_text}\n\n"
                     f"Hãy đọc nội dung trên và trả lời chi tiết yêu cầu của người dùng."
-                )
-        elif should_search_web(text):
-            logger.info(f"Triggering Clean Live Web Search for: {text}")
-            search_results = search_live_web(text)
-            if search_results and len(search_results) > 30:
-                user_query = (
-                    f"Câu hỏi của người dùng: {text}\n\n"
-                    f"[Dữ liệu tìm kiếm thời gian thực trên Internet]:\n{search_results}\n\n"
-                    f"Hãy tổng hợp các dữ liệu tìm kiếm thực tế trên để đưa ra câu trả lời chi tiết, chính xác, nêu rõ giá cả, địa điểm, thực đơn, đánh giá cụ thể cho người dùng."
                 )
 
         # Dynamic Model Selection
@@ -676,7 +611,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Clean Web Search...")
+    logger.info("Starting Cloud Long Polling Loop with Pro Knowledge Engine...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
