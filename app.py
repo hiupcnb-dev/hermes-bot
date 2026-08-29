@@ -49,7 +49,27 @@ conversation_history = {}
 user_memories = {}        # {chat_id: ["sở thích...", "dự án..."]}
 user_model_override = {}  # {chat_id: "gpt-5.6-sol" or None}
 pending_reminders = []    # [{"chat_id": int, "due_time": float, "text": str}]
-MAX_HISTORY_TURNS = 15
+MAX_HISTORY_TURNS = 12
+
+# City coordinates database for instant live weather lookup
+CITY_COORDS = {
+    "ninh bình": (20.25, 105.97),
+    "hà nội": (21.03, 105.85),
+    "hồ chí minh": (10.82, 106.63),
+    "sài gòn": (10.82, 106.63),
+    "đà nẵng": (16.05, 108.20),
+    "hải phòng": (20.84, 106.68),
+    "quảng ninh": (20.95, 107.07),
+    "thanh hóa": (19.81, 105.77),
+    "nam định": (20.42, 106.17),
+    "huế": (16.46, 107.60),
+    "nha trang": (12.24, 109.19),
+    "đà lạt": (11.94, 108.44),
+    "cần thơ": (10.04, 105.78),
+    "hạ long": (20.95, 107.07),
+    "sapa": (22.33, 103.84),
+    "tam đảo": (21.46, 105.64)
+}
 
 # Flask web app for Render Keep-Alive & Health Checks
 app = Flask(__name__)
@@ -59,10 +79,11 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Pro Knowledge Edition)",
+        "service": "Hermes Telegram Autonomous Bot 24/7 (Live Weather & Date Grounding Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
-            "pro_knowledge_engine",
+            "live_realtime_weather",
+            "date_time_grounding",
             "url_web_page_reader",
             "instant_emoji_reactions",
             "continuous_typing_feedback",
@@ -75,6 +96,49 @@ def health_check():
         "pending_reminders_count": len(pending_reminders),
         "timestamp": time.time()
     }), 200
+
+# ==========================================================
+# Real-Time Weather Integration (Open-Meteo & Wttr.in)
+# ==========================================================
+
+def get_live_weather(text):
+    text_lower = text.lower()
+    lat, lon = 20.25, 105.97 # default Ninh Bình
+    location_name = "Ninh Bình"
+    
+    for city, coords in CITY_COORDS.items():
+        if city in text_lower:
+            lat, lon = coords
+            location_name = city.title()
+            break
+            
+    try:
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FBangkok"
+        r = requests.get(url, timeout=6)
+        data = r.json()
+        curr = data["current"]
+        daily = data["daily"]
+        
+        weather_report = (
+            f"🌤️ [Dữ liệu Thời Tiết Khí Tượng Trực Tiếp - Trạm {location_name}]:\n"
+            f"• Nhiệt độ hiện tại: {curr['temperature_2m']}°C (Cảm nhận thực tế: {curr['apparent_temperature']}°C)\n"
+            f"• Độ ẩm không khí: {curr['relative_humidity_2m']}% | Tốc độ gió: {curr['wind_speed_10m']} km/h\n"
+            f"• Nhiệt độ hôm nay: Thấp nhất {daily['temperature_2m_min'][0]}°C — Cao nhất {daily['temperature_2m_max'][0]}°C\n"
+            f"• Xác suất mưa hôm nay: {daily['precipitation_probability_max'][0]}%\n"
+            f"• Dự báo 4 ngày tiếp theo (gồm dịp 2/9):\n"
+        )
+        for i in range(1, min(5, len(daily["time"]))):
+            weather_report += f"  - Ngày {daily['time'][i]}: {daily['temperature_2m_min'][i]}°C - {daily['temperature_2m_max'][i]}°C (Xác suất mưa: {daily['precipitation_probability_max'][i]}%)\n"
+            
+        return weather_report
+    except Exception as e:
+        logger.error(f"Weather error: {e}")
+        return ""
+
+def is_weather_query(text):
+    keywords = ["thời tiết", "trời mưa", "có mưa không", "nhiệt độ", "dự báo", "nắng", "gió", "2/9 thời tiết", "thời tiết hôm nay", "thời tiết ngày mai"]
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in keywords)
 
 # ==========================================================
 # Telegram Visual Feedback Helpers (Reactions & Typing)
@@ -324,11 +388,17 @@ def extract_text_from_file(file_bytes, file_name):
 # ==========================================================
 
 def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
+    now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+    time_str = now_vn.strftime("%A, ngày %d/%m/%Y, %H:%M:%S (GMT+7)")
+    
     system_prompt = (
-        "Bạn là Hermes - siêu trợ lý AI toàn năng, thông thái, am hiểu sâu sắc mọi lĩnh vực ẩm thực, địa điểm, nhà hàng, công nghệ và đời sống tại Việt Nam.\n"
-        "Bạn LUÔN LUÔN trả lời trực tiếp, cụ thể, chi tiết và đầy đủ nhất cho mọi câu hỏi của người dùng bằng tiếng Việt chuẩn Markdown.\n"
-        "Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988, King BBQ, v.v.), hãy cung cấp ngay thông tin chi tiết: địa chỉ cụ thể (ví dụ: BBQ 1988 tại Ninh Bình: Số 15 Lê Thánh Tông / Số 38 Đào Duy Từ), bảng giá vé buffet/combo, các món ngon quầy line, hotline và giờ phục vụ.\n"
-        "Tuyệt đối không từ chối, không bàn luận về công cụ tìm kiếm, luôn trả lời hữu ích và tự tin nhất."
+        f"Bạn là Hermes - siêu trợ lý AI toàn năng, chủ động, thông thái và am hiểu sâu sắc mọi lĩnh vực tại Việt Nam.\n"
+        f"Thời gian hiện tại: {time_str}.\n\n"
+        "NGUYÊN TẮC HÀNH ĐỘNG TUYỆT ĐỐI:\n"
+        "1. Luôn trực tiếp trả lời, báo cáo và giải quyết yêu cầu của người dùng, không bao giờ đùn đẩy bảo người dùng tự tìm.\n"
+        "2. Khi có dữ liệu thời tiết/thực tế được cung cấp, hãy đọc và phân tích chi tiết nhiệt độ, xác suất mưa, tư vấn thời điểm đi chơi/ăn uống thích hợp nhất.\n"
+        "3. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
+        "4. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể truy cập thời gian thực' hay từ chối."
     )
     
     if chat_id in user_memories and user_memories[chat_id]:
@@ -420,13 +490,14 @@ def handle_update(update):
         # Command: /start
         if text == "/start":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Pro Knowledge Edition 24/7)!**\n\n"
-                "🧠 **Các Tính Năng Thông Minh Đã Được Kích Hoạt 24/7:**\n"
-                "• 🥩 **Tra cứu Ẩm Thực & Địa Điểm:** Hỏi bất kỳ quán ăn, nhà hàng, giá cả, thực đơn tại Việt Nam.\n"
-                "• 💻 **Lập Trình Chuyên Sâu:** Tự động chuyển **`GPT-5.3 Codex`** khi hỏi code, sửa bug.\n"
-                "• 🧠 **Siêu Trí Tuệ Flagship:** Dùng **`GPT-5.6 Sol`** để suy luận logic và giải quyết vấn đề.\n"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Autonomous Live Edition 24/7)!**\n\n"
+                "🧠 **Các Tính Năng Tự Động Toàn Năng:**\n"
+                "• 🌤️ **Dữ Liệu Khí Tượng Thời Tiết Trực Tiếp:** Báo cáo thời tiết chuẩn xác theo thời gian thực tại mọi tỉnh thành.\n"
+                "• 🥩 **Tra cứu Ẩm Thực & Địa Điểm:** Tự động tra cứu và báo cáo chi tiết mọi nhà hàng, bảng giá, thực đơn.\n"
+                "• 💻 **Lập Trình Chuyên Sâu:** Tự động dùng **`GPT-5.3 Codex`** khi hỏi code, sửa bug.\n"
+                "• 🧠 **Siêu Trí Tuệ Flagship:** Dùng **`GPT-5.6 Sol`** giải quyết mọi vấn đề phức tạp.\n"
                 "• 👁️ **Mắt Thần Nhìn Ảnh:** Gửi ảnh để bot phân tích chi tiết.\n"
-                "• 📄 **Đọc File & Đọc Link:** Đọc và tóm tắt file PDF, Word, File Code, đọc link web.\n"
+                "• 📄 **Đọc File & Link:** Đọc PDF, Word, Code và link web.\n"
                 "• ⏰ **Hẹn Giờ & Ghi Nhớ:** Tự động nhắc nhở và lưu trí nhớ cá nhân.\n\n"
                 "🛠️ **Lệnh điều khiển:** `/help`, `/model`, `/reset`, `/memo`"
             )
@@ -447,6 +518,7 @@ def handle_update(update):
                 "   • `claude`: Claude Sonnet 4.6 (Văn phong cao cấp, viết lách).\n"
                 "   • `terra`: GPT-5.6 Terra (Phản hồi 1 giây, siêu tiết kiệm).\n\n"
                 "✨ **CÁC TÍNH NĂNG TỰ ĐỘNG KHÔNG CẦN LỆNH:**\n"
+                "• 🌤️ **Thời tiết:** Nhắn *'Thời tiết Ninh Bình hôm nay'*, *'Dự báo 2/9 có mưa không?'*.\n"
                 "• 🥩 **Hỏi giá cả, quán ăn, sự kiện:** Nhắn bất kỳ câu hỏi nào về ẩm thực, giá cả, nhà hàng.\n"
                 "• 👁️ **Gửi ảnh:** Bot tự động nhìn ảnh và phân tích.\n"
                 "• 📄 **Gửi file/link:** Bot tự động đọc và tóm tắt.\n"
@@ -594,6 +666,15 @@ def handle_update(update):
                     f"[Nội dung trang web thu thập được từ {target_url}]:\n{page_text}\n\n"
                     f"Hãy đọc nội dung trên và trả lời chi tiết yêu cầu của người dùng."
                 )
+        elif is_weather_query(text) or any(w in text.lower() for kw in ["thời tiết", "mưa", "nắng", "nhiệt độ"] for w in [kw]):
+            logger.info(f"Fetching live weather for: {text}")
+            weather_data = get_live_weather(text)
+            if weather_data:
+                user_query = (
+                    f"Câu hỏi của người dùng: {text}\n\n"
+                    f"{weather_data}\n\n"
+                    f"Hãy dựa vào dữ liệu khí tượng trực tiếp ở trên để báo cáo thời tiết và phân tích chi tiết, đưa ra lời khuyên đi chơi/ăn uống dịp 2/9 cho người dùng."
+                )
 
         # Dynamic Model Selection
         chosen_model, mode_tag = select_model_for_task(user_query, chat_id=chat_id)
@@ -611,7 +692,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Pro Knowledge Engine...")
+    logger.info("Starting Cloud Long Polling Loop with Live Weather & Grounding...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
