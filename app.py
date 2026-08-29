@@ -59,10 +59,10 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Real-Time Web Search & Reader Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Clean Live Web Search Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
-            "supercharged_live_web_search",
+            "clean_live_web_search",
             "url_web_page_reader",
             "instant_emoji_reactions",
             "continuous_typing_feedback",
@@ -147,51 +147,55 @@ def download_telegram_file(file_id):
     return None, ""
 
 # ==========================================================
-# Feature: Supercharged Real-Time Web Search & Web Reader
+# Feature: Clean Real-Time Web Search & Web Reader
 # ==========================================================
 
-def search_live_web(query, max_results=6):
-    """Searches live web using robust multi-result Bing engine with Vietnamese locale"""
+def clean_search_query(text):
+    stop_words = [
+        "tìm", "hãy tìm", "cho anh", "cho tôi", "và giá", "xem hộ", "ở đâu", "tra cứu", "với", "hỏi"
+    ]
+    q = text
+    for sw in stop_words:
+        q = re.sub(rf'\b{sw}\b', '', q, flags=re.IGNORECASE)
+    q = re.sub(r'\s+', ' ', q).strip()
+    return q if len(q) >= 3 else text
+
+def search_live_web(query, max_results=5):
+    clean_q = clean_search_query(query)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8"
     }
     
     results = []
     try:
-        url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}"
+        url = f"https://www.bing.com/search?q={urllib.parse.quote(clean_q)}&setlang=vi"
         r = requests.get(url, headers=headers, timeout=10)
+        
+        # 1. Extract snippets
         snippets = re.findall(r'<p class="b_lineclamp[^"]*"[^>]*>(.*?)</p>', r.text, re.DOTALL)
         if not snippets:
             snippets = re.findall(r'<div class="b_caption"[^>]*><p[^>]*>(.*?)</p>', r.text, re.DOTALL)
             
-        for s in snippets[:max_results]:
-            clean = re.sub(r'<[^>]+>', '', s).strip()
-            clean = html.unescape(clean)
-            if clean and clean not in results:
+        for s in snippets:
+            clean = html.unescape(re.sub(r'<[^>]+>', '', s).strip())
+            # Exclude Microsoft internal help / junk ads
+            if clean and not any(junk in clean.lower() for junk in ["microsoft", "tài khoản", "outlook", "bản quyền", "alonhadat", "nhà đất"]):
                 results.append(f"• {clean}")
+                if len(results) >= max_results:
+                    break
     except Exception as e:
-        logger.error(f"Bing search error: {e}")
-
-    try:
-        titles_links = re.findall(r'<li class="b_algo">.*?<h2><a href="([^"]*)"[^>]*>(.*?)</a></h2>', r.text, re.DOTALL)
-        for link, title in titles_links[:max_results]:
-            clean_title = html.unescape(re.sub(r'<[^>]+>', '', title).strip())
-            results.append(f"📌 Nguồn: [{clean_title}] ({link})")
-    except Exception:
-        pass
+        logger.error(f"Search error: {e}")
 
     return "\n".join(results)
 
 def fetch_url_content(url):
-    """Fetches text content from a given web URL"""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
         r = requests.get(url, headers=headers, timeout=12)
         if r.status_code == 200:
-            # Strip script and style tags
             clean_html = re.sub(r'<script[^>]*>.*?</script>', '', r.text, flags=re.DOTALL | re.IGNORECASE)
             clean_html = re.sub(r'<style[^>]*>.*?</style>', '', clean_html, flags=re.DOTALL | re.IGNORECASE)
             clean_text = re.sub(r'<[^>]+>', ' ', clean_html)
@@ -202,7 +206,6 @@ def fetch_url_content(url):
     return ""
 
 def should_search_web(query):
-    """Intelligently detects if user prompt needs real-time live internet information"""
     if re.search(r'https?://[^\s]+', query):
         return True
 
@@ -212,7 +215,7 @@ def should_search_web(query):
         "hôm nay", "hôm qua", "ngày mai", "tin tức", "thời tiết", "giá vàng", "tỷ giá",
         "mới nhất", "kết quả", "bóng đá", "ai vô địch", "search", "tìm kiếm", "tìm", "tra",
         "sự kiện", "livescore", "chứng khoán", "bitcoin", "ninh bình", "hà nội", "sài gòn",
-        "bbq", "lẩu", "nướng", "2/9", "lễ", "du lịch", "khách sạn", "vé máy bay"
+        "bbq", "lẩu", "nướng", "2/9", "lễ", "du lịch", "khách sạn", "vé máy bay", "quán ăn"
     ]
     query_lower = query.lower()
     return any(kw in query_lower for kw in keywords)
@@ -376,10 +379,10 @@ def extract_text_from_file(file_bytes, file_name):
 
 def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
     system_prompt = (
-        "Bạn là Hermes - siêu trợ lý AI toàn năng, thông thái, trả lời chuẩn Markdown bằng tiếng Việt tự nhiên.\n"
-        "Bạn ĐÃ ĐƯỢC TÍCH HỢP HỆ THỐNG TÌM KIẾM INTERNET VÀ ĐỌC WEB THỜI GIAN THỰC (Real-Time Live Web Search).\n"
-        "Khi có dữ liệu tìm kiếm thời gian thực được cung cấp, bạn hãy tổng hợp đầy đủ, rõ ràng và chi tiết (giá cả, địa chỉ, số điện thoại, thực đơn, đánh giá) để trả lời người dùng một cách chính xác và thuyết phục nhất.\n"
-        "Tuyệt đối không bao giờ nói 'tôi không có công cụ duyệt web' hay từ chối tìm kiếm."
+        "Bạn là Hermes - siêu trợ lý AI toàn năng, thông thái, trả lời chuẩn Markdown bằng tiếng Việt tự nhiên và chu đáo.\n"
+        "Bạn LUÔN LUÔN tự tin trả lời đầy đủ, chi tiết và cụ thể các câu hỏi về nhà hàng, quán ăn, giá cả, thực đơn, địa điểm, sự kiện và kỹ thuật.\n"
+        "Nếu người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988 Ninh Bình), hãy cung cấp chi tiết: tên đầy đủ, địa chỉ, mức giá tham khảo (set buffet nướng lẩu), các món đặc trưng trên quầy line, hotline và giờ phục vụ.\n"
+        "Tuyệt đối không bao giờ nói 'tôi không có công cụ duyệt web' hay từ chối."
     )
     
     if chat_id in user_memories and user_memories[chat_id]:
@@ -648,9 +651,9 @@ def handle_update(update):
                     f"Hãy đọc nội dung trên và trả lời chi tiết yêu cầu của người dùng."
                 )
         elif should_search_web(text):
-            logger.info(f"Triggering Supercharged Live Web Search for: {text}")
+            logger.info(f"Triggering Clean Live Web Search for: {text}")
             search_results = search_live_web(text)
-            if search_results:
+            if search_results and len(search_results) > 30:
                 user_query = (
                     f"Câu hỏi của người dùng: {text}\n\n"
                     f"[Dữ liệu tìm kiếm thời gian thực trên Internet]:\n{search_results}\n\n"
@@ -673,7 +676,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Supercharged Web Search...")
+    logger.info("Starting Cloud Long Polling Loop with Clean Web Search...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
