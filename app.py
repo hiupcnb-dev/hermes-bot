@@ -4,9 +4,11 @@ import sys
 import time
 import json
 import base64
+import html
 import logging
 import threading
 import datetime
+import urllib.parse
 from io import BytesIO
 import requests
 from flask import Flask, jsonify
@@ -57,15 +59,16 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Instant Feedback Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Real-Time Web Search & Reader Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
+            "supercharged_live_web_search",
+            "url_web_page_reader",
             "instant_emoji_reactions",
             "continuous_typing_feedback",
             "smart_model_router", 
             "vision_multimodal", 
             "file_reader", 
-            "live_web_search", 
             "reminders_and_memory", 
             "24_7_long_polling"
         ],
@@ -87,7 +90,6 @@ def send_telegram_request(method, payload):
         return None
 
 def set_message_reaction(chat_id, message_id, emoji="👀"):
-    """Instantly add an emoji reaction on the user's message to acknowledge receipt"""
     if not message_id:
         return
     payload = {
@@ -101,7 +103,6 @@ def send_chat_action(chat_id, action="typing"):
     send_telegram_request("sendChatAction", {"chat_id": chat_id, "action": action})
 
 class TypingKeeper:
-    """Sends 'typing' action continuously every 3.5s while AI is thinking"""
     def __init__(self, chat_id):
         self.chat_id = chat_id
         self.running = True
@@ -146,6 +147,77 @@ def download_telegram_file(file_id):
     return None, ""
 
 # ==========================================================
+# Feature: Supercharged Real-Time Web Search & Web Reader
+# ==========================================================
+
+def search_live_web(query, max_results=6):
+    """Searches live web using robust multi-result Bing engine with Vietnamese locale"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+    }
+    
+    results = []
+    try:
+        url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}"
+        r = requests.get(url, headers=headers, timeout=10)
+        snippets = re.findall(r'<p class="b_lineclamp[^"]*"[^>]*>(.*?)</p>', r.text, re.DOTALL)
+        if not snippets:
+            snippets = re.findall(r'<div class="b_caption"[^>]*><p[^>]*>(.*?)</p>', r.text, re.DOTALL)
+            
+        for s in snippets[:max_results]:
+            clean = re.sub(r'<[^>]+>', '', s).strip()
+            clean = html.unescape(clean)
+            if clean and clean not in results:
+                results.append(f"• {clean}")
+    except Exception as e:
+        logger.error(f"Bing search error: {e}")
+
+    try:
+        titles_links = re.findall(r'<li class="b_algo">.*?<h2><a href="([^"]*)"[^>]*>(.*?)</a></h2>', r.text, re.DOTALL)
+        for link, title in titles_links[:max_results]:
+            clean_title = html.unescape(re.sub(r'<[^>]+>', '', title).strip())
+            results.append(f"📌 Nguồn: [{clean_title}] ({link})")
+    except Exception:
+        pass
+
+    return "\n".join(results)
+
+def fetch_url_content(url):
+    """Fetches text content from a given web URL"""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+        r = requests.get(url, headers=headers, timeout=12)
+        if r.status_code == 200:
+            # Strip script and style tags
+            clean_html = re.sub(r'<script[^>]*>.*?</script>', '', r.text, flags=re.DOTALL | re.IGNORECASE)
+            clean_html = re.sub(r'<style[^>]*>.*?</style>', '', clean_html, flags=re.DOTALL | re.IGNORECASE)
+            clean_text = re.sub(r'<[^>]+>', ' ', clean_html)
+            clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+            return html.unescape(clean_text)[:8000]
+    except Exception as e:
+        logger.error(f"Error fetching URL {url}: {e}")
+    return ""
+
+def should_search_web(query):
+    """Intelligently detects if user prompt needs real-time live internet information"""
+    if re.search(r'https?://[^\s]+', query):
+        return True
+
+    keywords = [
+        "giá", "buffet", "quán", "nhà hàng", "menu", "thực đơn", "review", "đánh giá",
+        "facebook", "ở đâu", "địa chỉ", "số điện thoại", "mấy giờ", "mở cửa", "khuyến mãi",
+        "hôm nay", "hôm qua", "ngày mai", "tin tức", "thời tiết", "giá vàng", "tỷ giá",
+        "mới nhất", "kết quả", "bóng đá", "ai vô địch", "search", "tìm kiếm", "tìm", "tra",
+        "sự kiện", "livescore", "chứng khoán", "bitcoin", "ninh bình", "hà nội", "sài gòn",
+        "bbq", "lẩu", "nướng", "2/9", "lễ", "du lịch", "khách sạn", "vé máy bay"
+    ]
+    query_lower = query.lower()
+    return any(kw in query_lower for kw in keywords)
+
+# ==========================================================
 # Feature: Intelligent Dynamic Model Router
 # ==========================================================
 
@@ -169,7 +241,7 @@ def select_model_for_task(text, has_photo=False, has_doc=False, file_name="", ch
         "viết code", "sửa code", "fix bug", "lỗi code", "hàm", "function", "class", 
         "python", "java", "javascript", "script", "database", "sql", "api", "thuật toán",
         "debug", "source code", "html", "css", "c++", "c#", "nso", "jar", "mod",
-        "compile", "syntax", "endpoint", "regex", "lập trình", "viết bot", "bắt đầu làm"
+        "compile", "syntax", "endpoint", "regex", "lập trình", "viết bot"
     ]
     has_code_syntax = bool(re.search(r'```|def\s+\w+|class\s+\w+|import\s+\w+|function\s*\(|public\s+static|SELECT\s+.*FROM', text))
 
@@ -209,45 +281,6 @@ def anti_sleep_keep_alive():
         except Exception as e:
             logger.warning(f"Keep-Alive ping error: {e}")
         time.sleep(5 * 60)
-
-# ==========================================================
-# Feature: Real-time Live Web Search
-# ==========================================================
-
-def search_web_ddg(query, max_results=4):
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        url = "https://html.duckduckgo.com/html/"
-        data = {"q": query, "b": ""}
-        r = requests.post(url, data=data, headers=headers, timeout=10)
-        if r.status_code != 200:
-            return ""
-        
-        results = []
-        snippets = re.findall(r'<a class="result__snippet[^>]*>(.*?)</a>', r.text, re.DOTALL)
-        titles = re.findall(r'<a class="result__url[^>]*>(.*?)</a>', r.text, re.DOTALL)
-        
-        for i, snippet in enumerate(snippets[:max_results]):
-            clean_snippet = re.sub(r'<[^>]+>', '', snippet).strip()
-            clean_title = re.sub(r'<[^>]+>', '', titles[i]).strip() if i < len(titles) else ""
-            if clean_snippet:
-                results.append(f"- {clean_snippet} (Nguồn: {clean_title})")
-        
-        return "\n".join(results)
-    except Exception as e:
-        logger.error(f"Search error: {e}")
-        return ""
-
-def should_search_web(query):
-    keywords = [
-        "hôm nay", "thời tiết", "tin tức", "giá vàng", "tỷ giá", "mới nhất", 
-        "kết quả", "bóng đá", "ai vô địch", "search", "tìm kiếm", "hôm qua", 
-        "ngày mai", "sự kiện", "livescore", "chứng khoán", "bitcoin"
-    ]
-    query_lower = query.lower()
-    return any(kw in query_lower for kw in keywords)
 
 # ==========================================================
 # Feature: Reminder Parser & Background Scheduler
@@ -343,8 +376,10 @@ def extract_text_from_file(file_bytes, file_name):
 
 def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
     system_prompt = (
-        "Bạn là Hermes - siêu trợ lý AI thông minh toàn năng, trả lời lưu loát bằng tiếng Việt chuẩn Markdown.\n"
-        "Bạn tự động điều chỉnh phong cách theo yêu cầu: lập trình code chuẩn xác, phân tích sâu sắc, hội thoại tinh tế."
+        "Bạn là Hermes - siêu trợ lý AI toàn năng, thông thái, trả lời chuẩn Markdown bằng tiếng Việt tự nhiên.\n"
+        "Bạn ĐÃ ĐƯỢC TÍCH HỢP HỆ THỐNG TÌM KIẾM INTERNET VÀ ĐỌC WEB THỜI GIAN THỰC (Real-Time Live Web Search).\n"
+        "Khi có dữ liệu tìm kiếm thời gian thực được cung cấp, bạn hãy tổng hợp đầy đủ, rõ ràng và chi tiết (giá cả, địa chỉ, số điện thoại, thực đơn, đánh giá) để trả lời người dùng một cách chính xác và thuyết phục nhất.\n"
+        "Tuyệt đối không bao giờ nói 'tôi không có công cụ duyệt web' hay từ chối tìm kiếm."
     )
     
     if chat_id in user_memories and user_memories[chat_id]:
@@ -422,13 +457,13 @@ def handle_update(update):
     photos = message.get("photo")
     document = message.get("document")
 
-    # 1. INSTANT ACKNOWLEDGEMENT: Add '👀' reaction immediately upon message receipt!
+    # Instant acknowledgement: Add '👀' reaction immediately
     try:
         set_message_reaction(chat_id, message_id, "👀")
     except Exception as e:
         logger.warning(f"Failed to set reaction: {e}")
 
-    # 2. CONTINUOUS TYPING INDICATOR: Keep 'typing...' flashing in Telegram header
+    # Continuous typing indicator in header
     typing_keeper = TypingKeeper(chat_id)
     typing_keeper.start()
 
@@ -436,21 +471,15 @@ def handle_update(update):
         # Command: /start
         if text == "/start":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Bản Tiếng Việt 24/7)!**\n\n"
-                "🧠 **Combo Định Tuyến Mô Hình Tự Động:**\n"
-                "• 💻 **Khi hỏi Code/Lập trình:** Tự động chuyển **`GPT-5.3 Codex Spark`**\n"
-                "• 🧠 **Khi Suy luận/Phân tích/Hỏi đáp sâu:** Dùng **`GPT-5.6 Sol`** (Frontier Flagship)\n"
-                "• ⚡ **Khi Chat nhanh/Chào hỏi:** Tự động dùng **`GPT-5.6 Terra`** (TTFT 1s siêu tốc)\n"
-                "• 👁️ **Khi gửi Ảnh:** Tự động dùng **`GPT-5.6 Sol Vision`**\n\n"
-                "🛠️ **Các lệnh điều khiển nhanh:**\n"
-                "• `/model auto` — Bật tự động chọn model thông minh (Mặc định)\n"
-                "• `/model sol` — Ép dùng GPT-5.6 Sol\n"
-                "• `/model code` — Ép dùng GPT-5.3 Codex\n"
-                "• `/model claude` — Ép dùng Claude Sonnet 4.6\n"
-                "• `/model terra` — Ép dùng GPT-5.6 Terra\n"
-                "• `/reset` — Làm mới cuộc trò chuyện\n"
-                "• `/memo` — Xem thông tin bot đang ghi nhớ\n"
-                "• `/help` — Xem hướng dẫn sử dụng chi tiết"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Real-Time Web Search & Reader)!**\n\n"
+                "🧠 **Các Tính Năng Thông Minh Đã Được Kích Hoạt 24/7:**\n"
+                "• 🌐 **Duyệt Web & Tìm Kiếm Trực Tuyến:** Tra cứu giá cả, quán ăn, menu, tin tức theo thời gian thực.\n"
+                "• 💻 **Lập Trình Chuyên Sâu:** Tự động chuyển **`GPT-5.3 Codex`** khi hỏi code, sửa bug.\n"
+                "• 🧠 **Siêu Trí Tuệ Flagship:** Dùng **`GPT-5.6 Sol`** để suy luận logic và giải quyết vấn đề.\n"
+                "• 👁️ **Mắt Thần Nhìn Ảnh:** Gửi ảnh để bot phân tích chi tiết.\n"
+                "• 📄 **Đọc File:** Đọc và tóm tắt file PDF, Word, File Code.\n"
+                "• ⏰ **Hẹn Giờ & Ghi Nhớ:** Tự động nhắc nhở và lưu trí nhớ cá nhân.\n\n"
+                "🛠️ **Lệnh điều khiển:** `/help`, `/model`, `/reset`, `/memo`"
             )
             send_message(chat_id, welcome, reply_to_message_id=message_id)
             return
@@ -469,6 +498,7 @@ def handle_update(update):
                 "   • `claude`: Claude Sonnet 4.6 (Văn phong cao cấp, viết lách).\n"
                 "   • `terra`: GPT-5.6 Terra (Phản hồi 1 giây, siêu tiết kiệm).\n\n"
                 "✨ **CÁC TÍNH NĂNG TỰ ĐỘNG KHÔNG CẦN LỆNH:**\n"
+                "• 🌐 **Tìm kiếm Web & Tra cứu:** Nhắn bất kỳ câu hỏi nào cần tra cứu giá cả, quán ăn, thời tiết, tin tức.\n"
                 "• 👁️ **Gửi ảnh:** Bot tự động nhìn ảnh và phân tích.\n"
                 "• 📄 **Gửi file (.pdf, .docx, file code):** Bot tự động đọc và tóm tắt.\n"
                 "• ⏰ **Hẹn giờ:** Nhắn *'Nhắc anh sau 10 phút...'* hoặc *'Nhắc tôi lúc 08:00...'*.\n"
@@ -602,16 +632,29 @@ def handle_update(update):
             set_message_reaction(chat_id, message_id, "👍")
             return
 
-        # Web search
+        # Real-time Web Search & URL Reader
         user_query = text
-        if should_search_web(text):
-            logger.info(f"Triggering Web Search for: {text}")
-            search_results = search_web_ddg(text)
+        
+        # Check for URL link in text
+        url_match = re.search(r'(https?://[^\s]+)', text)
+        if url_match:
+            target_url = url_match.group(1)
+            logger.info(f"Fetching URL content for: {target_url}")
+            page_text = fetch_url_content(target_url)
+            if page_text:
+                user_query = (
+                    f"Câu hỏi của người dùng: {text}\n\n"
+                    f"[Nội dung trang web thu thập được từ {target_url}]:\n{page_text}\n\n"
+                    f"Hãy đọc nội dung trên và trả lời chi tiết yêu cầu của người dùng."
+                )
+        elif should_search_web(text):
+            logger.info(f"Triggering Supercharged Live Web Search for: {text}")
+            search_results = search_live_web(text)
             if search_results:
                 user_query = (
                     f"Câu hỏi của người dùng: {text}\n\n"
-                    f"[Thông tin tìm kiếm thời gian thực trên Internet]:\n{search_results}\n\n"
-                    f"Hãy tổng hợp thông tin trên một cách ngắn gọn, chính xác để trả lời người dùng."
+                    f"[Dữ liệu tìm kiếm thời gian thực trên Internet]:\n{search_results}\n\n"
+                    f"Hãy tổng hợp các dữ liệu tìm kiếm thực tế trên để đưa ra câu trả lời chi tiết, chính xác, nêu rõ giá cả, địa điểm, thực đơn, đánh giá cụ thể cho người dùng."
                 )
 
         # Dynamic Model Selection
@@ -623,7 +666,6 @@ def handle_update(update):
         set_message_reaction(chat_id, message_id, "🔥")
 
     finally:
-        # Stop the typing indicator thread when reply is completely sent
         typing_keeper.stop()
 
 # ==========================================================
@@ -631,7 +673,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Instant Feedback...")
+    logger.info("Starting Cloud Long Polling Loop with Supercharged Web Search...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
