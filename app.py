@@ -33,7 +33,6 @@ logger = logging.getLogger("HermesCloudBot")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8905133975:AAHjwARgwjIOMeoO522zT3NjmnHKhgtcy2M")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-n7hCiWdN4Tok6tDSBg7WEvqbZmqhBMqbjH5H4oSSaSiS4ade")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://apithat.dev/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3.7-flash")
 ALLOWED_USERS_RAW = os.getenv("TELEGRAM_ALLOWED_USERS", "8322961603")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://hermes-bot-drl1.onrender.com")
 
@@ -43,21 +42,11 @@ for uid in ALLOWED_USERS_RAW.split(","):
     if uid.isdigit():
         ALLOWED_USERS.add(int(uid))
 
-# Comprehensive fallback pool of proven working models
-FALLBACK_MODELS = [
-    "gemini-3.7-flash", 
-    "gemini-3.6-flash", 
-    "gpt-5.4-mini", 
-    "claude-sonnet-4-6", 
-    "grok-4.5", 
-    "gpt-5.3-codex-spark", 
-    "gemini-3.5-flash"
-]
-
 # In-memory data structures
 conversation_history = {}
-user_memories = {}  # {chat_id: ["sở thích...", "dự án..."]}
-pending_reminders = []  # [{"chat_id": int, "due_time": float, "text": str}]
+user_memories = {}        # {chat_id: ["sở thích...", "dự án..."]}
+user_model_override = {}  # {chat_id: "gpt-5.6-sol" or None}
+pending_reminders = []    # [{"chat_id": int, "due_time": float, "text": str}]
 MAX_HISTORY_TURNS = 20
 
 # Flask web app for Render Keep-Alive & Health Checks
@@ -68,12 +57,82 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Multi-Model Resilient Edition)",
-        "model": MODEL_NAME,
-        "features": ["vision_multimodal", "file_reader", "live_web_search", "reminders_and_memory", "24_7_long_polling", "auto_retry_failover"],
+        "service": "Hermes Telegram Super-Bot 24/7 (AI Smart Router Edition)",
+        "default_frontier_model": "gpt-5.6-sol",
+        "features": [
+            "smart_model_router", 
+            "vision_multimodal", 
+            "file_reader", 
+            "live_web_search", 
+            "reminders_and_memory", 
+            "24_7_long_polling"
+        ],
         "pending_reminders_count": len(pending_reminders),
         "timestamp": time.time()
     }), 200
+
+# ==========================================================
+# Feature: Intelligent Dynamic Model Router
+# ==========================================================
+
+def select_model_for_task(text, has_photo=False, has_doc=False, file_name="", chat_id=None):
+    """
+    Intelligently analyzes the prompt/content and selects the optimal specialized AI model:
+    - Coding / Bug fixing / Scripting -> gpt-5.3-codex-spark (fallback claude-sonnet-4-6)
+    - Photo / Vision Analysis         -> gpt-5.6-sol
+    - Short greeting / Simple chat   -> gpt-5.6-terra (1s response, ultra-cost-effective)
+    - Deep reasoning / Complex chat   -> gpt-5.6-sol (Frontier Flagship)
+    """
+    # Check if user manually set an override (via /model command)
+    if chat_id and chat_id in user_model_override and user_model_override[chat_id]:
+        override = user_model_override[chat_id]
+        return override, f"⚙️ [Chế độ Cố định: {override}]"
+
+    # 1. Vision (Images)
+    if has_photo:
+        return "gpt-5.6-sol", "👁️ [Phân tích Thị giác - GPT-5.6 Sol]"
+
+    # 2. Files & Documents
+    if has_doc:
+        ext = os.path.splitext(file_name)[1].lower()
+        if ext in [".py", ".java", ".js", ".ts", ".cpp", ".c", ".cs", ".php", ".html", ".css", ".sql", ".sh", ".json", ".jar"]:
+            return "gpt-5.3-codex-spark", "💻 [Phân tích Mã nguồn - GPT-5.3 Codex]"
+        return "gpt-5.6-sol", "📄 [Phân tích Tài liệu - GPT-5.6 Sol]"
+
+    text_lower = text.lower()
+
+    # 3. Coding & Software Development Intent
+    code_keywords = [
+        "viết code", "sửa code", "fix bug", "lỗi code", "hàm", "function", "class", 
+        "python", "java", "javascript", "script", "database", "sql", "api", "thuật toán",
+        "debug", "source code", "html", "css", "c++", "c#", "nso", "jar", "mod",
+        "compile", "syntax", "endpoint", "regex", "lập trình", "viết bot"
+    ]
+    has_code_syntax = bool(re.search(r'```|def\s+\w+|class\s+\w+|import\s+\w+|function\s*\(|public\s+static|SELECT\s+.*FROM', text))
+
+    if any(kw in text_lower for kw in code_keywords) or has_code_syntax:
+        return "gpt-5.3-codex-spark", "💻 [Chuyên gia Lập trình - GPT-5.3 Codex]"
+
+    # 4. Short / Casual greeting (Optimized for 1s response & low token cost)
+    short_casual = ["chào", "hi", "hello", "alo", "ê", "bạn là ai", "test", "ok", "cảm ơn", "thanks", "tạm biệt", "bye"]
+    if len(text.split()) <= 4 and any(w in text_lower for w in short_casual):
+        return "gpt-5.6-terra", "⚡ [Hội thoại Siêu tốc - GPT-5.6 Terra]"
+
+    # 5. Default Frontier AI for Deep Reasoning, Creative, Analysis & Knowledge
+    return "gpt-5.6-sol", "🧠 [Siêu Trí Tuệ Suy luận - GPT-5.6 Sol]"
+
+def get_fallback_chain(primary_model):
+    """Build a logical fallback chain based on the chosen primary model"""
+    pool = [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.3-codex-spark",
+        "claude-sonnet-4-6",
+        "gpt-5.4-mini",
+        "grok-4.5",
+        "gemini-3.7-flash"
+    ]
+    return [primary_model] + [m for m in pool if m != primary_model]
 
 # ==========================================================
 # Anti-Sleep Keep-Alive Loop (Self-Ping every 5 mins)
@@ -90,7 +149,7 @@ def anti_sleep_keep_alive():
             logger.info(f"Keep-Alive ping to {url}: Status {r.status_code}")
         except Exception as e:
             logger.warning(f"Keep-Alive ping error: {e}")
-        time.sleep(5 * 60) # Ping every 5 minutes
+        time.sleep(5 * 60)
 
 # ==========================================================
 # Telegram API Helpers
@@ -121,7 +180,6 @@ def send_message(chat_id, text, reply_to_message_id=None):
             send_telegram_request("sendMessage", payload)
 
 def download_telegram_file(file_id):
-    """Download a file from Telegram by file_id and return (bytes, file_name)"""
     file_info = send_telegram_request("getFile", {"file_id": file_id})
     if not file_info or not file_info.get("ok"):
         return None, ""
@@ -133,7 +191,7 @@ def download_telegram_file(file_id):
     return None, ""
 
 # ==========================================================
-# Feature 2: Real-time Live Web Search
+# Feature: Real-time Live Web Search
 # ==========================================================
 
 def search_web_ddg(query, max_results=4):
@@ -172,14 +230,13 @@ def should_search_web(query):
     return any(kw in query_lower for kw in keywords)
 
 # ==========================================================
-# Feature 4: Reminder Parser & Background Scheduler
+# Feature: Reminder Parser & Background Scheduler
 # ==========================================================
 
 def parse_reminder(text):
     text_lower = text.lower()
     now = time.time()
     
-    # 1. 'sau X phút / tiếng / giây'
     rel_match = re.search(r'nhắc\s+(?:tôi|anh|em|mình)\s+sau\s+(\d+)\s*(phút|p|tiếng|giờ|h|giây|s)\s+(?:là\s+|để\s+|đi\s+)?(.+)', text_lower)
     if rel_match:
         val = int(rel_match.group(1))
@@ -194,7 +251,6 @@ def parse_reminder(text):
             
         return now + delta, remind_content
         
-    # 2. 'lúc HH:MM'
     time_match = re.search(r'nhắc\s+(?:tôi|anh|em|mình)\s+lúc\s+(\d{1,2})[:h](\d{1,2})\s*(?:phút)?\s+(?:là\s+|để\s+|đi\s+)?(.+)', text_lower)
     if time_match:
         hour = int(time_match.group(1))
@@ -231,7 +287,7 @@ def reminder_scheduler_loop():
         time.sleep(5)
 
 # ==========================================================
-# Feature 5: File & Document Extraction
+# Feature: File & Document Extraction
 # ==========================================================
 
 def extract_text_from_file(file_bytes, file_name):
@@ -262,13 +318,13 @@ def extract_text_from_file(file_bytes, file_name):
             return f"[Không thể đọc text: {e}]"
 
 # ==========================================================
-# Core Resilient LLM Engine (Auto-Retry & Failover)
+# Core Dynamic Multi-Model LLM Engine
 # ==========================================================
 
-def query_llm(chat_id, user_content, is_multimodal=False):
+def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
     system_prompt = (
-        "Bạn là Hermes - trợ lý AI toàn năng, thông minh, hỗ trợ tận tâm bằng tiếng Việt chuẩn Markdown.\n"
-        "Bạn có khả năng: phân tích hình ảnh, đọc tài liệu/code, tìm kiếm thông tin mới nhất và đặt lịch nhắc nhở."
+        "Bạn là Hermes - siêu trợ lý AI thông minh toàn năng, trả lời lưu loát bằng tiếng Việt chuẩn Markdown.\n"
+        "Bạn tự động điều chỉnh phong cách theo yêu cầu: lập trình code chuẩn xác, phân tích sâu sắc, hội thoại tinh tế."
     )
     
     if chat_id in user_memories and user_memories[chat_id]:
@@ -292,12 +348,11 @@ def query_llm(chat_id, user_content, is_multimodal=False):
         "Content-Type": "application/json"
     }
 
-    # Build prioritized model list without duplicates
-    models_to_try = [MODEL_NAME] + [m for m in FALLBACK_MODELS if m != MODEL_NAME]
-    last_error = ""
+    # Dynamic prioritized model fallback chain
+    models_to_try = get_fallback_chain(chosen_model)
 
     for model in models_to_try:
-        for attempt in range(2): # 2 attempts per model
+        for attempt in range(2):
             try:
                 payload = {
                     "model": model,
@@ -313,19 +368,16 @@ def query_llm(chat_id, user_content, is_multimodal=False):
                     conversation_history[chat_id].append({"role": "assistant", "content": assistant_reply})
                     return assistant_reply
                 elif r.status_code in [503, 502, 504, 429]:
-                    last_error = f"HTTP {r.status_code} ({model})"
-                    logger.warning(f"Model {model} busy (attempt {attempt+1}): {r.text[:100]}. Retrying...")
+                    logger.warning(f"Model {model} returned {r.status_code}, retrying...")
                     time.sleep(1.5)
                 else:
-                    last_error = f"HTTP {r.status_code} ({model})"
-                    logger.warning(f"Model {model} failed: {r.text[:100]}")
-                    break # Try next model
+                    logger.warning(f"Model {model} failed with HTTP {r.status_code}: {r.text[:80]}")
+                    break # Switch to next model in pool
             except Exception as e:
-                last_error = f"{type(e).__name__} ({model})"
-                logger.warning(f"Model {model} error: {e}")
+                logger.warning(f"Model {model} exception: {e}")
                 time.sleep(1)
 
-    return "⚠️ Máy chủ AI đang có lưu lượng truy cập cao đột biến trong giây lát. Em đã thử kết nối lại, anh vui lòng nhắn lại giúp em sau vài giây nhé!"
+    return "⚠️ Máy chủ AI đang có lưu lượng truy cập cao đột biến. Anh vui lòng gửi lại tin nhắn sau vài giây nhé!"
 
 # ==========================================================
 # Telegram Update Handler
@@ -354,14 +406,47 @@ def handle_update(update):
     # Command: /start
     if text == "/start":
         welcome = (
-            "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Cloud Edition 24/7)!**\n\n"
-            "✨ **Em đã được kích hoạt chạy 24/7 vĩnh viễn trên đám mây:**\n"
-            "1. 👁️ **Mắt thần nhìn ảnh:** Gửi ảnh đề bài, ảnh lỗi màn hình, sản phẩm để em phân tích.\n"
-            "2. 📄 **Đọc file tài liệu:** Gửi file PDF, Word, file code (.py, .java, .txt...) để em đọc và tóm tắt.\n"
-            "3. 🌐 **Tìm kiếm Web trực tiếp:** Tự động tra cứu tin tức, giá cả, thời tiết theo thời gian thực.\n"
-            "4. ⏰ **Hẹn giờ & Ghi nhớ:** Gõ *'Nhắc tôi sau 15 phút họp'* hoặc *'Hãy nhớ tôi thích cà phê đen'*."
+            "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Smart Model Router Edition)!**\n\n"
+            "🧠 **Combo Định Tuyến Mô Hình Tự Động:**\n"
+            "• 💻 **Khi hỏi Code/Lập trình:** Tự động chuyển **`GPT-5.3 Codex Spark`**\n"
+            "• 🧠 **Khi Suy luận/Phân tích/Hỏi đáp sâu:** Dùng **`GPT-5.6 Sol`** (Frontier Flagship)\n"
+            "• ⚡ **Khi Chat nhanh/Chào hỏi:** Tự động dùng **`GPT-5.6 Terra`** (TTFT 1s siêu tốc)\n"
+            "• 👁️ **Khi gửi Ảnh:** Tự động dùng **`GPT-5.6 Sol Vision`**\n\n"
+            "🛠️ **Lệnh điều khiển Model thủ công:**\n"
+            "• `/model auto` — Bật chế độ tự động định tuyến thông minh (Mặc định)\n"
+            "• `/model sol` — Ép dùng GPT-5.6 Sol\n"
+            "• `/model code` — Ép dùng GPT-5.3 Codex\n"
+            "• `/model claude` — Ép dùng Claude Sonnet 4.6\n"
+            "• `/model terra` — Ép dùng GPT-5.6 Terra"
         )
         send_message(chat_id, welcome, reply_to_message_id=message_id)
+        return
+
+    # Command: /model (Thủ công chuyển model)
+    if text.startswith("/model"):
+        parts = text.split()
+        if len(parts) > 1:
+            m_arg = parts[1].lower()
+            if m_arg in ["auto", "default"]:
+                user_model_override.pop(chat_id, None)
+                send_message(chat_id, "✅ Đã bật chế độ **Tự Động Định Tuyến Model Thông Minh (Smart Router)**!", reply_to_message_id=message_id)
+            elif m_arg in ["sol", "gpt-5.6-sol"]:
+                user_model_override[chat_id] = "gpt-5.6-sol"
+                send_message(chat_id, "✅ Đã cố định Model: **GPT-5.6 Sol** (Siêu suy luận)!", reply_to_message_id=message_id)
+            elif m_arg in ["code", "codex", "gpt-5.3-codex-spark"]:
+                user_model_override[chat_id] = "gpt-5.3-codex-spark"
+                send_message(chat_id, "✅ Đã cố định Model: **GPT-5.3 Codex Spark** (Chuyên lập trình)!", reply_to_message_id=message_id)
+            elif m_arg in ["claude", "sonnet", "claude-sonnet-4-6"]:
+                user_model_override[chat_id] = "claude-sonnet-4-6"
+                send_message(chat_id, "✅ Đã cố định Model: **Claude Sonnet 4.6**!", reply_to_message_id=message_id)
+            elif m_arg in ["terra", "gpt-5.6-terra"]:
+                user_model_override[chat_id] = "gpt-5.6-terra"
+                send_message(chat_id, "✅ Đã cố định Model: **GPT-5.6 Terra** (Siêu tốc & Tiết kiệm)!", reply_to_message_id=message_id)
+            else:
+                send_message(chat_id, "⚠️ Cú pháp: `/model [auto | sol | code | claude | terra]`", reply_to_message_id=message_id)
+        else:
+            current = user_model_override.get(chat_id, "Tự động (Smart Router)")
+            send_message(chat_id, f"ℹ️ Model hiện tại của anh: **{current}**\nĐổi model bằng cách gõ: `/model [auto | sol | code | claude | terra]`", reply_to_message_id=message_id)
         return
 
     # Command: /reset
@@ -395,7 +480,9 @@ def handle_update(update):
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
             ]
             
-            reply = query_llm(chat_id, content_payload, is_multimodal=True)
+            chosen_model, mode_tag = select_model_for_task(prompt_text, has_photo=True, chat_id=chat_id)
+            logger.info(f"Routed Photo to: {chosen_model} ({mode_tag})")
+            reply = query_llm(chat_id, content_payload, chosen_model=chosen_model)
             send_message(chat_id, reply, reply_to_message_id=message_id)
         else:
             send_message(chat_id, "⚠️ Không thể tải ảnh từ Telegram, anh thử gửi lại nhé!", reply_to_message_id=message_id)
@@ -418,7 +505,9 @@ def handle_update(update):
                 f"Yêu cầu của người dùng: {prompt_text}"
             )
             
-            reply = query_llm(chat_id, full_prompt)
+            chosen_model, mode_tag = select_model_for_task(full_prompt, has_doc=True, file_name=file_name, chat_id=chat_id)
+            logger.info(f"Routed Document to: {chosen_model} ({mode_tag})")
+            reply = query_llm(chat_id, full_prompt, chosen_model=chosen_model)
             send_message(chat_id, reply, reply_to_message_id=message_id)
         else:
             send_message(chat_id, f"⚠️ Không thể tải file `{file_name}`, anh gửi lại nhé!", reply_to_message_id=message_id)
@@ -469,7 +558,11 @@ def handle_update(update):
                 f"Hãy tổng hợp thông tin trên một cách ngắn gọn, chính xác để trả lời người dùng."
             )
 
-    reply = query_llm(chat_id, user_query)
+    # Dynamic Model Selection
+    chosen_model, mode_tag = select_model_for_task(user_query, chat_id=chat_id)
+    logger.info(f"Dynamic Router selected: {chosen_model} ({mode_tag}) for text: {text[:50]}")
+    
+    reply = query_llm(chat_id, user_query, chosen_model=chosen_model)
     send_message(chat_id, reply, reply_to_message_id=message_id)
 
 # ==========================================================
@@ -477,7 +570,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop...")
+    logger.info("Starting Cloud Long Polling Loop with Smart Model Router...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
