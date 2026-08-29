@@ -9,7 +9,7 @@ import threading
 import datetime
 from io import BytesIO
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 
 try:
     import pypdf
@@ -51,7 +51,7 @@ user_memories = {}  # {chat_id: ["sở thích...", "dự án..."]}
 pending_reminders = []  # [{"chat_id": int, "due_time": float, "text": str}]
 MAX_HISTORY_TURNS = 20
 
-# Flask web app for Render Webhook & Health Checks
+# Flask web app for Render Keep-Alive & Health Checks
 app = Flask(__name__)
 
 @app.route("/")
@@ -59,51 +59,12 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Webhook + Anti-Sleep Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Long Polling + Anti-Sleep Edition)",
         "model": MODEL_NAME,
-        "features": ["vision_multimodal", "file_reader", "live_web_search", "reminders_and_memory", "webhook_push"],
+        "features": ["vision_multimodal", "file_reader", "live_web_search", "reminders_and_memory", "24_7_long_polling"],
         "pending_reminders_count": len(pending_reminders),
         "timestamp": time.time()
     }), 200
-
-# ==========================================================
-# Feature: Telegram Webhook (Direct & Synchronous)
-# ==========================================================
-
-@app.route("/webhook", methods=["POST"])
-def telegram_webhook():
-    """Telegram pushes updates here via HTTPS Webhook"""
-    update = request.get_json(force=True, silent=True)
-    if update:
-        logger.info(f"Webhook received update: {update.get('update_id')}")
-        try:
-            handle_update(update)
-        except Exception as e:
-            logger.error(f"Error executing handle_update: {e}", exc_info=True)
-    return jsonify({"ok": True}), 200
-
-@app.route("/setup-webhook")
-def setup_webhook_route():
-    webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/webhook"
-    res = send_telegram_request("setWebhook", {
-        "url": webhook_url,
-        "drop_pending_updates": False
-    })
-    return jsonify({
-        "webhook_url": webhook_url,
-        "telegram_response": res
-    }), 200
-
-def auto_setup_webhook():
-    """Register Webhook on startup after 3 seconds"""
-    time.sleep(3)
-    webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/webhook"
-    logger.info(f"Setting Telegram Webhook to {webhook_url}...")
-    res = send_telegram_request("setWebhook", {
-        "url": webhook_url,
-        "drop_pending_updates": False
-    })
-    logger.info(f"Webhook setup result: {res}")
 
 # ==========================================================
 # Anti-Sleep Keep-Alive Loop (Self-Ping every 5 mins)
@@ -167,7 +128,6 @@ def download_telegram_file(file_id):
 # ==========================================================
 
 def search_web_ddg(query, max_results=4):
-    """Perform real-time web search via DuckDuckGo HTML scraper"""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -266,9 +226,7 @@ def reminder_scheduler_loop():
 # ==========================================================
 
 def extract_text_from_file(file_bytes, file_name):
-    """Extract text from PDF, Docx, or plain text code files"""
     ext = os.path.splitext(file_name)[1].lower()
-    
     if ext == ".pdf":
         if pypdf:
             try:
@@ -280,7 +238,6 @@ def extract_text_from_file(file_bytes, file_name):
             except Exception as e:
                 return f"[Lỗi đọc file PDF: {e}]"
         return "[Thư viện pypdf chưa sẵn sàng]"
-        
     elif ext in [".docx", ".doc"]:
         if docx:
             try:
@@ -289,7 +246,6 @@ def extract_text_from_file(file_bytes, file_name):
             except Exception as e:
                 return f"[Lỗi đọc file Word: {e}]"
         return "[Thư viện python-docx chưa sẵn sàng]"
-        
     else:
         try:
             return file_bytes.decode("utf-8", errors="replace")[:20000]
@@ -381,8 +337,8 @@ def handle_update(update):
     # Command: /start
     if text == "/start":
         welcome = (
-            "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Cloud 24/7 - Webhook Edition)!**\n\n"
-            "✨ **Em đã được kích hoạt chạy 24/7 vĩnh viễn không bao giờ ngủ:**\n"
+            "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Cloud Edition 24/7)!**\n\n"
+            "✨ **Em đã được kích hoạt chạy 24/7 vĩnh viễn trên đám mây:**\n"
             "1. 👁️ **Mắt thần nhìn ảnh:** Gửi ảnh đề bài, ảnh lỗi màn hình, sản phẩm để em phân tích.\n"
             "2. 📄 **Đọc file tài liệu:** Gửi file PDF, Word, file code (.py, .java, .txt...) để em đọc và tóm tắt.\n"
             "3. 🌐 **Tìm kiếm Web trực tiếp:** Tự động tra cứu tin tức, giá cả, thời tiết theo thời gian thực.\n"
@@ -500,8 +456,41 @@ def handle_update(update):
     send_message(chat_id, reply, reply_to_message_id=message_id)
 
 # ==========================================================
-# Background Threads (Scheduler + Keep-Alive + Webhook Setup)
+# 24/7 Cloud Long Polling Loop (Direct Telegram Connection)
 # ==========================================================
+
+def cloud_polling_loop():
+    logger.info("Starting Cloud Long Polling Loop...")
+    # First, make sure webhook is removed so polling works seamlessly
+    try:
+        send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
+        logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
+    except Exception as e:
+        logger.error(f"deleteWebhook error: {e}")
+
+    offset = 0
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+            params = {"offset": offset, "timeout": 30}
+            r = requests.get(url, params=params, timeout=40)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("ok"):
+                    for update in data.get("result", []):
+                        offset = update["update_id"] + 1
+                        try:
+                            handle_update(update)
+                        except Exception as e:
+                            logger.error(f"Error handling update: {e}", exc_info=True)
+            elif r.status_code == 409:
+                logger.warning("Conflict 409: Another bot instance is polling. Retrying in 5s...")
+                time.sleep(5)
+            else:
+                time.sleep(3)
+        except Exception as e:
+            logger.error(f"Polling exception: {e}")
+            time.sleep(5)
 
 # 1. Reminder scheduler thread
 reminder_thread = threading.Thread(target=reminder_scheduler_loop, daemon=True)
@@ -511,9 +500,9 @@ reminder_thread.start()
 keep_alive_thread = threading.Thread(target=anti_sleep_keep_alive, daemon=True)
 keep_alive_thread.start()
 
-# 3. Webhook auto-setup thread
-webhook_setup_thread = threading.Thread(target=auto_setup_webhook, daemon=True)
-webhook_setup_thread.start()
+# 3. Direct Cloud Polling thread (runs on Render 24/7)
+polling_thread = threading.Thread(target=cloud_polling_loop, daemon=True)
+polling_thread.start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
