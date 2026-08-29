@@ -57,7 +57,7 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (AI Smart Router Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Vietnamese Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
             "smart_model_router", 
@@ -76,23 +76,13 @@ def health_check():
 # ==========================================================
 
 def select_model_for_task(text, has_photo=False, has_doc=False, file_name="", chat_id=None):
-    """
-    Intelligently analyzes the prompt/content and selects the optimal specialized AI model:
-    - Coding / Bug fixing / Scripting -> gpt-5.3-codex-spark (fallback claude-sonnet-4-6)
-    - Photo / Vision Analysis         -> gpt-5.6-sol
-    - Short greeting / Simple chat   -> gpt-5.6-terra (1s response, ultra-cost-effective)
-    - Deep reasoning / Complex chat   -> gpt-5.6-sol (Frontier Flagship)
-    """
-    # Check if user manually set an override (via /model command)
     if chat_id and chat_id in user_model_override and user_model_override[chat_id]:
         override = user_model_override[chat_id]
         return override, f"⚙️ [Chế độ Cố định: {override}]"
 
-    # 1. Vision (Images)
     if has_photo:
         return "gpt-5.6-sol", "👁️ [Phân tích Thị giác - GPT-5.6 Sol]"
 
-    # 2. Files & Documents
     if has_doc:
         ext = os.path.splitext(file_name)[1].lower()
         if ext in [".py", ".java", ".js", ".ts", ".cpp", ".c", ".cs", ".php", ".html", ".css", ".sql", ".sh", ".json", ".jar"]:
@@ -101,7 +91,6 @@ def select_model_for_task(text, has_photo=False, has_doc=False, file_name="", ch
 
     text_lower = text.lower()
 
-    # 3. Coding & Software Development Intent
     code_keywords = [
         "viết code", "sửa code", "fix bug", "lỗi code", "hàm", "function", "class", 
         "python", "java", "javascript", "script", "database", "sql", "api", "thuật toán",
@@ -113,16 +102,13 @@ def select_model_for_task(text, has_photo=False, has_doc=False, file_name="", ch
     if any(kw in text_lower for kw in code_keywords) or has_code_syntax:
         return "gpt-5.3-codex-spark", "💻 [Chuyên gia Lập trình - GPT-5.3 Codex]"
 
-    # 4. Short / Casual greeting (Optimized for 1s response & low token cost)
     short_casual = ["chào", "hi", "hello", "alo", "ê", "bạn là ai", "test", "ok", "cảm ơn", "thanks", "tạm biệt", "bye"]
     if len(text.split()) <= 4 and any(w in text_lower for w in short_casual):
         return "gpt-5.6-terra", "⚡ [Hội thoại Siêu tốc - GPT-5.6 Terra]"
 
-    # 5. Default Frontier AI for Deep Reasoning, Creative, Analysis & Knowledge
     return "gpt-5.6-sol", "🧠 [Siêu Trí Tuệ Suy luận - GPT-5.6 Sol]"
 
 def get_fallback_chain(primary_model):
-    """Build a logical fallback chain based on the chosen primary model"""
     pool = [
         "gpt-5.6-sol",
         "gpt-5.6-terra",
@@ -139,7 +125,6 @@ def get_fallback_chain(primary_model):
 # ==========================================================
 
 def anti_sleep_keep_alive():
-    """Pings self every 5 minutes so Render Free Tier NEVER sleeps"""
     logger.info("Anti-Sleep Keep-Alive loop started.")
     time.sleep(15)
     while True:
@@ -348,7 +333,6 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
         "Content-Type": "application/json"
     }
 
-    # Dynamic prioritized model fallback chain
     models_to_try = get_fallback_chain(chosen_model)
 
     for model in models_to_try:
@@ -372,7 +356,7 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
                     time.sleep(1.5)
                 else:
                     logger.warning(f"Model {model} failed with HTTP {r.status_code}: {r.text[:80]}")
-                    break # Switch to next model in pool
+                    break
             except Exception as e:
                 logger.warning(f"Model {model} exception: {e}")
                 time.sleep(1)
@@ -406,23 +390,48 @@ def handle_update(update):
     # Command: /start
     if text == "/start":
         welcome = (
-            "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Smart Model Router Edition)!**\n\n"
+            "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Bản Tiếng Việt 24/7)!**\n\n"
             "🧠 **Combo Định Tuyến Mô Hình Tự Động:**\n"
             "• 💻 **Khi hỏi Code/Lập trình:** Tự động chuyển **`GPT-5.3 Codex Spark`**\n"
             "• 🧠 **Khi Suy luận/Phân tích/Hỏi đáp sâu:** Dùng **`GPT-5.6 Sol`** (Frontier Flagship)\n"
             "• ⚡ **Khi Chat nhanh/Chào hỏi:** Tự động dùng **`GPT-5.6 Terra`** (TTFT 1s siêu tốc)\n"
             "• 👁️ **Khi gửi Ảnh:** Tự động dùng **`GPT-5.6 Sol Vision`**\n\n"
-            "🛠️ **Lệnh điều khiển Model thủ công:**\n"
-            "• `/model auto` — Bật chế độ tự động định tuyến thông minh (Mặc định)\n"
+            "🛠️ **Các lệnh điều khiển nhanh:**\n"
+            "• `/model auto` — Bật tự động chọn model thông minh (Mặc định)\n"
             "• `/model sol` — Ép dùng GPT-5.6 Sol\n"
             "• `/model code` — Ép dùng GPT-5.3 Codex\n"
             "• `/model claude` — Ép dùng Claude Sonnet 4.6\n"
-            "• `/model terra` — Ép dùng GPT-5.6 Terra"
+            "• `/model terra` — Ép dùng GPT-5.6 Terra\n"
+            "• `/reset` — Làm mới cuộc trò chuyện\n"
+            "• `/memo` — Xem thông tin bot đang ghi nhớ\n"
+            "• `/help` — Xem hướng dẫn sử dụng chi tiết"
         )
         send_message(chat_id, welcome, reply_to_message_id=message_id)
         return
 
-    # Command: /model (Thủ công chuyển model)
+    # Command: /help
+    if text == "/help":
+        help_text = (
+            "📖 **DANH SÁCH LỆNH VÀ HƯỚNG DẪN TIẾNG VIỆT**\n\n"
+            "1. 🚀 **/start** — Khởi động và xem thông tin bot.\n"
+            "2. 🔄 **/reset** — Làm mới cuộc trò chuyện, xóa ngữ cảnh cũ.\n"
+            "3. 🧠 **/memo** — Xem các thông tin cá nhân/sở thích bot đang nhớ về anh.\n"
+            "4. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi model AI:\n"
+            "   • `auto`: Tự động nhận diện câu hỏi để chọn model phù hợp nhất.\n"
+            "   • `sol`: GPT-5.6 Sol (Mạnh nhất, suy luận logic sâu).\n"
+            "   • `code`: GPT-5.3 Codex (Chuyên lập trình, sửa bug code).\n"
+            "   • `claude`: Claude Sonnet 4.6 (Văn phong cao cấp, viết lách).\n"
+            "   • `terra`: GPT-5.6 Terra (Phản hồi 1 giây, siêu tiết kiệm).\n\n"
+            "✨ **CÁC TÍNH NĂNG TỰ ĐỘNG KHÔNG CẦN LỆNH:**\n"
+            "• 👁️ **Gửi ảnh:** Bot tự động nhìn ảnh và phân tích.\n"
+            "• 📄 **Gửi file (.pdf, .docx, file code):** Bot tự động đọc và tóm tắt.\n"
+            "• ⏰ **Hẹn giờ:** Nhắn *'Nhắc anh sau 10 phút...'* hoặc *'Nhắc tôi lúc 08:00...'*.\n"
+            "• 🧠 **Ghi nhớ:** Nhắn *'Hãy nhớ rằng tôi thích...'* để bot lưu vào bộ nhớ."
+        )
+        send_message(chat_id, help_text, reply_to_message_id=message_id)
+        return
+
+    # Command: /model
     if text.startswith("/model"):
         parts = text.split()
         if len(parts) > 1:
