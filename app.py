@@ -39,6 +39,8 @@ ALLOWED_USERS_RAW = os.getenv("TELEGRAM_ALLOWED_USERS", "8322961603")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://hermes-bot-drl1.onrender.com")
 
 SUBSCRIPTIONS_FILE = "scheduled_subscriptions.json"
+MEMORIES_FILE = "user_memories.json"
+SKILLS_FILE = "skills_registry.json"
 
 ALLOWED_USERS = set()
 for uid in ALLOWED_USERS_RAW.split(","):
@@ -48,7 +50,6 @@ for uid in ALLOWED_USERS_RAW.split(","):
 
 # In-memory data structures
 conversation_history = {}
-user_memories = {}        # {chat_id: ["sở thích...", "dự án..."]}
 user_model_override = {}  # {chat_id: "gpt-5.6-sol" or None}
 pending_reminders = []    # [{"chat_id": int, "due_time": float, "text": str}]
 MAX_HISTORY_TURNS = 12
@@ -74,7 +75,7 @@ CITY_COORDS = {
 }
 
 # ==========================================================
-# Persistent Subscriptions Database
+# Persistent Subscriptions, Memories & Dynamic Skills
 # ==========================================================
 
 def load_subscriptions():
@@ -104,6 +105,86 @@ def save_subscriptions(subs):
 
 subscriptions = load_subscriptions()
 
+def load_memories():
+    if os.path.exists(MEMORIES_FILE):
+        try:
+            with open(MEMORIES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading memories: {e}")
+    return {
+        "8322961603": [
+            "Tên người dùng: Hiếu",
+            "Nơi ở hiện tại: Ninh Bình",
+            "Lĩnh vực: Lập trình viên, nghiên cứu AI, Python, Java NSO Modding",
+            "Sở thích ẩm thực: Thích ăn buffet nướng lẩu BBQ 1988 Ninh Bình"
+        ]
+    }
+
+def save_memories(mems):
+    try:
+        with open(MEMORIES_FILE, "w", encoding="utf-8") as f:
+            json.dump(mems, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving memories: {e}")
+
+user_memories = load_memories()
+
+DEFAULT_SKILLS = {
+    "nso_modding": {
+        "name": "Ninja School Online Modding",
+        "description": "Kỹ thuật dịch ngược, chỉnh sửa mã nguồn file JAR và nạp IP server riêng cho NSO Java ME",
+        "instructions": "Khi người dùng hỏi về NSO, JAR, mod Auto50, Up Yên, đổi IP Tailscale/LAN, hãy hướng dẫn cụ thể với bytecode, Recaf, manifest.",
+        "created_by": "system"
+    },
+    "code_reviewer": {
+        "name": "Chuyên Gia Đánh Giá & Tối Ưu Code",
+        "description": "Kiểm tra bug, bảo mật, tối ưu hiệu năng và viết Clean Code",
+        "instructions": "Phân tích kỹ lưỡng các lỗi tiềm ẩn, memory leak, race condition và cung cấp code refactor hoàn chỉnh.",
+        "created_by": "system"
+    },
+    "copywriting_pro": {
+        "name": "Bậc Thầy Sáng Tạo Nội Dung & Viral Marketing",
+        "description": "Soạn thảo bài viết Facebook, kịch bản TikTok, bài PR sản phẩm triệu view",
+        "instructions": "Viết nội dung theo công thức AIDA hoặc PAS, giật tít thu hút, CTA mạnh mẽ và tối ưu tương tác.",
+        "created_by": "system"
+    },
+    "english_coach": {
+        "name": "Gia Sư Tiếng Anh Bản Ngữ",
+        "description": "Luyện giao tiếp, sửa lỗi phát âm/ngữ pháp và dịch thuật nâng cao",
+        "instructions": "Giải thích chi tiết các thành ngữ, từ vựng tự nhiên của người bản xứ và gợi ý các mẫu câu thực tế.",
+        "created_by": "system"
+    }
+}
+
+def load_skills():
+    if os.path.exists(SKILLS_FILE):
+        try:
+            with open(SKILLS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading skills: {e}")
+    return DEFAULT_SKILLS
+
+def save_skills(skills_dict):
+    try:
+        with open(SKILLS_FILE, "w", encoding="utf-8") as f:
+            json.dump(skills_dict, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving skills: {e}")
+
+skills_registry = load_skills()
+
+def match_relevant_skills(user_text):
+    matched = []
+    text_lower = user_text.lower()
+    for k, v in skills_registry.items():
+        name = v.get("name", "").lower()
+        desc = v.get("description", "").lower()
+        if any(w in text_lower for w in name.split() if len(w) > 2) or any(w in text_lower for w in desc.split() if len(w) > 3):
+            matched.append(v)
+    return matched
+
 # Flask web app for Render Keep-Alive & Health Checks
 app = Flask(__name__)
 
@@ -112,9 +193,11 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Generative Multi-Media Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Self-Learning Skill & Persistent Memory Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
+            "dynamic_self_created_skills",
+            "persistent_long_term_memory",
             "ai_image_generation_flux",
             "ai_video_and_animation",
             "text_to_speech_voice",
@@ -136,6 +219,7 @@ def health_check():
             "reminders_and_memory", 
             "24_7_long_polling"
         ],
+        "registered_skills_count": len(skills_registry),
         "active_subscribers": [k for k, v in subscriptions.items() if v.get("enabled")],
         "pending_reminders_count": len(pending_reminders),
         "timestamp": time.time()
@@ -288,7 +372,6 @@ def generate_qr_code(data_text):
 def capture_web_screenshot(url):
     if not url.startswith("http"):
         url = "https://" + url
-    encoded = urllib.parse.quote(url)
     screen_url = f"https://image.thum.io/get/width/1200/crop/800/noanimate/{url}"
     try:
         r = requests.get(screen_url, timeout=20)
@@ -309,8 +392,9 @@ def generate_briefing(briefing_type="morning", location="Ninh Bình", chat_id=No
     rates_info = get_live_rates()
     
     mem_info = ""
-    if chat_id and chat_id in user_memories and user_memories[chat_id]:
-        mem_info = "\nGhi chú/việc cần lưu ý của người dùng:\n" + "\n".join([f"- {m}" for m in user_memories[chat_id]])
+    chat_id_str = str(chat_id)
+    if chat_id_str in user_memories and user_memories[chat_id_str]:
+        mem_info = "\nThông tin trí nhớ cá nhân của người dùng:\n" + "\n".join([f"- {m}" for m in user_memories[chat_id_str]])
         
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -481,12 +565,15 @@ def get_main_menu_keyboard():
                 {"text": "📱 Tạo Mã QR", "callback_data": "btn_help_qr"}
             ],
             [
-                {"text": "🌤️ Thời Tiết Ninh Bình", "callback_data": "btn_weather"},
-                {"text": "💰 Tỷ Giá & Crypto", "callback_data": "btn_rates"}
+                {"text": "🧠 Kỹ Năng & Bộ Nhớ", "callback_data": "btn_skills_memos"},
+                {"text": "🌤️ Thời Tiết Ninh Bình", "callback_data": "btn_weather"}
             ],
             [
-                {"text": "🧠 Chọn Model AI", "callback_data": "btn_models"},
-                {"text": "🔄 Làm Mới Chat", "callback_data": "btn_reset"}
+                {"text": "💰 Tỷ Giá & Crypto", "callback_data": "btn_rates"},
+                {"text": "⚙️ Đổi Model AI", "callback_data": "btn_models"}
+            ],
+            [
+                {"text": "🔄 Làm Mới Cuộc Trò Chuyện", "callback_data": "btn_reset"}
             ]
         ]
     }
@@ -719,10 +806,10 @@ def extract_text_from_file(file_bytes, file_name):
             return f"[Không thể đọc text: {e}]"
 
 # ==========================================================
-# Core Dynamic Multi-Model LLM Engine
+# Core Dynamic Multi-Model LLM Engine with Skills & Memory
 # ==========================================================
 
-def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
+def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol", matched_skills=None):
     now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
     time_str = now_vn.strftime("%A, ngày %d/%m/%Y, %H:%M:%S (GMT+7)")
     
@@ -731,14 +818,20 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
         f"Thời gian hiện tại: {time_str}.\n\n"
         "NGUYÊN TẮC HÀNH ĐỘNG TUYỆT ĐỐI:\n"
         "1. Luôn trực tiếp trả lời, báo cáo và giải quyết yêu cầu của người dùng, không bao giờ đùn đẩy bảo người dùng tự tìm.\n"
-        "2. Bạn sở hữu các công cụ: Tạo Ảnh AI Flux (`/draw`), Tạo Video (`/video`), Đọc Tiếng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Tra Cứu Tỷ Giá & Crypto, Thời Tiết Trực Tiếp.\n"
-        "3. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
-        "4. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể tạo ảnh' hay từ chối."
+        "2. Bạn sở hữu Hệ Thống Kỹ Năng Tự Học (Skills Engine) và Bộ Nhớ Dài Hạn (Persistent Memory) vĩnh viễn.\n"
+        "3. Bạn có đủ các công cụ: Tạo Ảnh AI Flux (`/draw`), Tạo Video, Đọc Tiếng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Tỷ Giá & Crypto, Thời Tiết.\n"
+        "4. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
+        "5. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể tạo ảnh' hay từ chối."
     )
     
-    if chat_id in user_memories and user_memories[chat_id]:
-        mem_str = "\n".join([f"- {m}" for m in user_memories[chat_id]])
-        system_prompt += f"\n\nThông tin đã ghi nhớ về người dùng:\n{mem_str}"
+    chat_id_str = str(chat_id)
+    if chat_id_str in user_memories and user_memories[chat_id_str]:
+        mem_str = "\n".join([f"- {m}" for m in user_memories[chat_id_str]])
+        system_prompt += f"\n\n🧠 THÔNG TIN ĐÃ GHI NHỚ VĨNH VIỄN VỀ NGƯỜI DÙNG:\n{mem_str}"
+
+    if matched_skills:
+        skill_str = "\n\n".join([f"✨ KỸ NĂNG CHUYÊN SÂU [{s['name']}]:\n- Mô tả: {s['description']}\n- Hướng dẫn thực thi: {s['instructions']}" for s in matched_skills])
+        system_prompt += f"\n\n⚡ KÍCH HOẠT CÁC KỸ NĂNG CHUYÊN GIA PHÙ HỢP:\n{skill_str}"
 
     if chat_id not in conversation_history:
         conversation_history[chat_id] = [{"role": "system", "content": system_prompt}]
@@ -822,6 +915,19 @@ def handle_callback_query(callback_query):
         send_message(chat_id, "🎨 **HƯỚNG DẪN TẠO ẢNH AI FLUX.1:**\n\nAnh chỉ cần gõ:\n👉 `/draw [mô tả ảnh]` hoặc nhắn *'Vẽ cho anh chú rồng bay qua mây vàng'*\n\nBot sẽ tự động vẽ và gửi ảnh 1024x1024 chất lượng cao cho anh!")
     elif data == "btn_help_qr":
         send_message(chat_id, "📱 **HƯỚNG DẪN TẠO MÃ QR TỨC THÌ:**\n\nAnh gõ:\n👉 `/qr [link/wifi/stk]` hoặc nhắn *'Tạo mã QR cho link https://google.com'*\n\nBot sẽ gửi ảnh mã QR sắc nét ngay lập tức!")
+    elif data == "btn_skills_memos":
+        skills_text = "\n".join([f"• **{v['name']}**: _{v['description']}_" for k, v in skills_registry.items()])
+        mems = user_memories.get(chat_id_str, [])
+        mems_text = "\n".join([f"- {m}" for m in mems]) if mems else "Chưa có thông tin ghi nhớ nào."
+        msg = (
+            f"🧠 **HỆ THỐNG KỸ NĂNG & BỘ NHỚ VĨNH VIỄN**\n\n"
+            f"⚡ **Danh sách Kỹ năng AI ({len(skills_registry)} Skills):**\n{skills_text}\n\n"
+            f"📝 **Dữ liệu Trí nhớ Hermes đã lưu về anh:**\n{mems_text}\n\n"
+            f"💡 **Cách thêm:**\n"
+            f"• Thêm kỹ năng mới: `/skill add [tên] | [mô tả] | [hướng dẫn]`\n"
+            f"• Ghi nhớ mới: Gõ *'Hãy nhớ rằng tôi thích...'* hoặc `/memo add [nội dung]`"
+        )
+        send_message(chat_id, msg)
     elif data == "btn_models":
         send_message(chat_id, "⚙️ **Chọn Não Bộ AI Cho Cuộc Trò Chuyện:**", reply_markup=get_model_menu_keyboard())
     elif data == "btn_reset":
@@ -858,6 +964,7 @@ def handle_update(update):
 
     chat = message.get("chat", {})
     chat_id = chat.get("id")
+    chat_id_str = str(chat_id)
     user_id = message.get("from", {}).get("id")
     message_id = message.get("message_id")
 
@@ -886,17 +993,16 @@ def handle_update(update):
         # Command: /start or /menu
         if text == "/start" or text == "/menu":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Generative Multi-Media Edition 24/7)!**\n\n"
-                "🎨 **Các Tính Năng Sáng Tạo & Tự Động Hóa Toàn Năng:**\n"
-                "• 🎨 **Tạo Ảnh AI Nghệ Thuật (`/draw [mô tả]`):** Vẽ ảnh chất lượng 8k sắc nét với Model Flux.1.\n"
-                "• 🔊 **Đọc Thành Giọng Nói (`/tts [văn bản]`):** Chuyển lời văn thành voice note âm thanh.\n"
-                "• 📱 **Tạo Mã QR Tức Thì (`/qr [nội dung/link]`):** Tạo mã QR cho link, WiFi, số tài khoản.\n"
-                "• 🖼️ **Chụp Ảnh Màn Hình Web (`/capture [link]`):** Chụp full trang web bất kỳ.\n"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Self-Learning Skill & Persistent Memory Edition 24/7)!**\n\n"
+                "🧠 **Các Tính Năng Thông Minh Toàn Năng:**\n"
+                "• ⚡ **Tự Học & Tự Tạo Skill (`/skill`):** Dạy bot các kỹ năng chuyên môn mới theo ý anh.\n"
+                "• 💾 **Bộ Nhớ Vĩnh Viễn (`/memo`):** Lưu trữ sở thích, dự án, thông tin cá nhân vĩnh viễn không bao giờ quên.\n"
+                "• 🎨 **Tạo Ảnh AI Nghệ Thuật (`/draw [mô tả]`):** Vẽ ảnh 8k sắc nét với Model Flux.1.\n"
+                "• 🔊 **Đọc Giọng Nói TTS (`/tts [văn bản]`):** Chuyển lời văn thành voice note âm thanh.\n"
+                "• 📱 **Tạo Mã QR Tức Thì (`/qr [nội dung/link]`):** Tạo mã QR cho link, WiFi, STK.\n"
                 "• 📰 **Bản Tin Sáng (07:00) & Tối (20:00):** Tự động tổng hợp thời tiết, tỷ giá, tin tức.\n"
                 "• 💰 **Tỷ Giá Ngoại Tệ & Crypto 24/7:** Giá USD, EUR, BTC, ETH trực tiếp.\n"
-                "• 🎙️ **Nghe & Hiểu Voice Note:** Gửi ghi âm để bot trả lời.\n"
-                "• 🥩 **Tra Cứu Ẩm Thực & Địa Điểm:** Báo giá buffet, menu quán ăn chi tiết.\n"
-                "• 💻 **Lập Trình Chuyên Sâu:** Tự động dùng **`GPT-5.3 Codex`** khi hỏi code.\n\n"
+                "• 🎙️ **Nghe & Hiểu Voice Note:** Gửi ghi âm để bot trả lời.\n\n"
                 "👇 **Anh có thể chạm nhanh các nút bên dưới để trải nghiệm ngay:**"
             )
             send_message(chat_id, welcome, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
@@ -905,18 +1011,107 @@ def handle_update(update):
         # Command: /help
         if text == "/help":
             help_text = (
-                "📖 **DANH SÁCH LỆNH VÀ CÔNG CỤ SÁNG TẠO**\n\n"
-                "1. 🎨 **/draw [mô tả]** hoặc **/image [mô tả]** — Tạo ảnh AI Flux.1 sắc nét.\n"
-                "2. 🔊 **/tts [văn bản]** hoặc **/speak** — Chuyển văn bản thành giọng nói Voice Note.\n"
-                "3. 📱 **/qr [link/văn bản]** — Tạo ảnh mã QR tức thì.\n"
-                "4. 🖼️ **/capture [link]** — Chụp ảnh màn hình trang web.\n"
-                "5. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối.\n"
-                "6. 🔘 **/menu** — Mở bảng nút điều khiển tương tác nhanh.\n"
-                "7. 🔄 **/reset** — Làm mới cuộc trò chuyện, xóa ngữ cảnh cũ.\n"
-                "8. 🧠 **/memo** — Xem thông tin bot đang ghi nhớ.\n"
-                "9. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi não bộ AI."
+                "📖 **DANH SÁCH LỆNH VÀ CÔNG CỤ TỰ ĐỘNG**\n\n"
+                "1. ⚡ **/skill** — Quản lý và dạy kỹ năng mới cho bot:\n"
+                "   • `/skills` : Xem danh sách kỹ năng hiện có.\n"
+                "   • `/skill add [tên] | [mô tả] | [hướng dẫn]` : Tạo skill mới.\n"
+                "2. 🧠 **/memo** — Quản lý bộ nhớ dài hạn vĩnh viễn:\n"
+                "   • `/memo` : Xem toàn bộ thông tin bot đang nhớ.\n"
+                "   • `/memo add [nội dung]` : Thêm thông tin mới vào bộ nhớ.\n"
+                "   • `/memo clear` : Xóa toàn bộ bộ nhớ.\n"
+                "3. 🎨 **/draw [mô tả]** — Tạo ảnh AI Flux.1 sắc nét.\n"
+                "4. 🔊 **/tts [văn bản]** — Chuyển văn bản thành giọng nói Voice Note.\n"
+                "5. 📱 **/qr [link/văn bản]** — Tạo ảnh mã QR tức thì.\n"
+                "6. 🖼️ **/capture [link]** — Chụp ảnh màn hình trang web.\n"
+                "7. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối.\n"
+                "8. 🔘 **/menu** — Mở bảng nút điều khiển tương tác nhanh.\n"
+                "9. 🔄 **/reset** — Làm mới cuộc trò chuyện.\n"
+                "10. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi não bộ AI."
             )
             send_message(chat_id, help_text, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
+            return
+
+        # Command: /skills or /skill (Quản lý Kỹ năng Tự Tạo)
+        if text.startswith("/skill") or text.startswith("/skills"):
+            parts = text.split(maxsplit=2)
+            if len(parts) > 1:
+                sub_cmd = parts[1].lower()
+                if sub_cmd in ["add", "tao", "tạo", "them", "thêm"] and len(parts) > 2:
+                    content_str = parts[2]
+                    chunks = [c.strip() for c in content_str.split("|")]
+                    if len(chunks) >= 3:
+                        s_name, s_desc, s_inst = chunks[0], chunks[1], chunks[2]
+                        s_id = re.sub(r'\W+', '_', s_name.lower()).strip('_')
+                        skills_registry[s_id] = {
+                            "name": s_name,
+                            "description": s_desc,
+                            "instructions": s_inst,
+                            "created_by": "user"
+                        }
+                        save_skills(skills_registry)
+                        send_message(
+                            chat_id, 
+                            f"✅ **ĐÃ TẠO VÀ LƯU KỸ NĂNG MỚI THÀNH CÔNG!**\n\n"
+                            f"📌 **Tên Skill:** `{s_name}`\n"
+                            f"📝 **Mô tả:** {s_desc}\n"
+                            f"⚡ **Hướng dẫn:** {s_inst}\n\n"
+                            f"Từ bây giờ, bất cứ khi nào anh hỏi về chủ đề này, Hermes sẽ tự động kích hoạt kỹ năng chuyên gia này!", 
+                            reply_to_message_id=message_id
+                        )
+                        return
+                    else:
+                        send_message(chat_id, "⚠️ Cú pháp tạo skill: `/skill add [Tên] | [Mô tả] | [Hướng dẫn chi tiết]`\nVí dụ:\n`/skill add Soi Kèo | Chuyên gia bóng đá | Phân tích phong độ, thống kê và nhận định tỷ lệ kèo khách quan`", reply_to_message_id=message_id)
+                        return
+                elif sub_cmd in ["del", "xoa", "xóa"] and len(parts) > 2:
+                    target = parts[2].strip().lower()
+                    found = False
+                    for k in list(skills_registry.keys()):
+                        if target in k or target in skills_registry[k]["name"].lower():
+                            del skills_registry[k]
+                            found = True
+                            save_skills(skills_registry)
+                            send_message(chat_id, f"🗑️ Đã xóa kỹ năng `{target}` thành công!", reply_to_message_id=message_id)
+                            break
+                    if not found:
+                        send_message(chat_id, f"⚠️ Không tìm thấy kỹ năng `{target}`.", reply_to_message_id=message_id)
+                    return
+            
+            # List all skills
+            skills_list = "\n\n".join([f"✨ **{v['name']}** (`{k}`):\n- Mô tả: _{v['description']}_\n- Tác giả: `{v.get('created_by', 'system')}`" for k, v in skills_registry.items()])
+            msg = (
+                f"⚡ **DANH SÁCH TOÀN BỘ KỸ NĂNG HIỆN CÓ ({len(skills_registry)} Skills):**\n\n"
+                f"{skills_list}\n\n"
+                f"👉 **Tạo thêm kỹ năng mới:**\n"
+                f"`/skill add [Tên] | [Mô tả] | [Hướng dẫn chi tiết]`"
+            )
+            send_message(chat_id, msg, reply_to_message_id=message_id)
+            return
+
+        # Command: /memo (Quản lý Bộ Nhớ Vĩnh Viễn)
+        if text.startswith("/memo"):
+            parts = text.split(maxsplit=2)
+            if len(parts) > 1:
+                sub_cmd = parts[1].lower()
+                if sub_cmd in ["add", "them", "thêm"] and len(parts) > 2:
+                    fact = parts[2].strip()
+                    if chat_id_str not in user_memories:
+                        user_memories[chat_id_str] = []
+                    user_memories[chat_id_str].append(fact)
+                    save_memories(user_memories)
+                    send_message(chat_id, f"🧠 **Đã lưu vào bộ nhớ vĩnh viễn:** \"{fact}\"", reply_to_message_id=message_id)
+                    return
+                elif sub_cmd in ["clear", "xoa", "xóa", "reset"]:
+                    user_memories[chat_id_str] = []
+                    save_memories(user_memories)
+                    send_message(chat_id, "🗑️ Đã xóa toàn bộ dữ liệu bộ nhớ của anh.", reply_to_message_id=message_id)
+                    return
+
+            mems = user_memories.get(chat_id_str, [])
+            if mems:
+                msg = "🧠 **CÁC THÔNG TIN HERMES ĐANG GHI NHỚ VĨNH VIỄN VỀ ANH:**\n\n" + "\n".join([f"• {m}" for m in mems]) + "\n\n👉 Thêm thông tin mới: `/memo add [nội dung]` hoặc gõ *'Hãy nhớ rằng...'*."
+            else:
+                msg = "🧠 Hiện tại em chưa lưu thông tin nào. Anh có thể nói: *'Hãy nhớ rằng tôi là lập trình viên'* hoặc `/memo add [nội dung]`."
+            send_message(chat_id, msg, reply_to_message_id=message_id)
             return
 
         # Command: /draw or /image (Tạo ảnh AI Flux)
@@ -967,13 +1162,12 @@ def handle_update(update):
                 send_photo(chat_id, shot_bytes, caption=f"📸 **Ảnh Chụp Màn Hình Web:** `{target_web}`", reply_to_message_id=message_id)
                 set_message_reaction(chat_id, message_id, "🔥")
             else:
-                send_message(chat_id, "⚠️ Không thể chụp ảnh trang web này (có thể do trang web chặn truy cập).", reply_to_message_id=message_id)
+                send_message(chat_id, "⚠️ Không thể chụp ảnh trang web này.", reply_to_message_id=message_id)
             return
 
         # Command: /daily (Quản lý Bản Tin Sáng & Tối)
         if text.startswith("/daily"):
             parts = text.split()
-            chat_id_str = str(chat_id)
             if chat_id_str not in subscriptions:
                 subscriptions[chat_id_str] = {
                     "enabled": True,
@@ -1015,19 +1209,19 @@ def handle_update(update):
             if len(parts) > 1:
                 m_arg = parts[1].lower()
                 if m_arg in ["auto", "default"]:
-                    user_model_override.pop(str(chat_id), None)
+                    user_model_override.pop(chat_id_str, None)
                     send_message(chat_id, "✅ Đã bật chế độ **Tự Động Định Tuyến Model Thông Minh (Smart Router)**!", reply_to_message_id=message_id)
                 elif m_arg in ["sol", "gpt-5.6-sol"]:
-                    user_model_override[str(chat_id)] = "gpt-5.6-sol"
+                    user_model_override[chat_id_str] = "gpt-5.6-sol"
                     send_message(chat_id, "✅ Đã cố định Model: **GPT-5.6 Sol** (Siêu suy luận)!", reply_to_message_id=message_id)
                 elif m_arg in ["code", "codex", "gpt-5.3-codex-spark"]:
-                    user_model_override[str(chat_id)] = "gpt-5.3-codex-spark"
+                    user_model_override[chat_id_str] = "gpt-5.3-codex-spark"
                     send_message(chat_id, "✅ Đã cố định Model: **GPT-5.3 Codex Spark** (Chuyên lập trình)!", reply_to_message_id=message_id)
                 elif m_arg in ["claude", "sonnet", "claude-sonnet-4-6"]:
-                    user_model_override[str(chat_id)] = "claude-sonnet-4-6"
+                    user_model_override[chat_id_str] = "claude-sonnet-4-6"
                     send_message(chat_id, "✅ Đã cố định Model: **Claude Sonnet 4.6**!", reply_to_message_id=message_id)
                 elif m_arg in ["terra", "gpt-5.6-terra"]:
-                    user_model_override[str(chat_id)] = "gpt-5.6-terra"
+                    user_model_override[chat_id_str] = "gpt-5.6-terra"
                     send_message(chat_id, "✅ Đã cố định Model: **GPT-5.6 Terra** (Siêu tốc & Tiết kiệm)!", reply_to_message_id=message_id)
                 else:
                     send_message(chat_id, "⚠️ Cú pháp: `/model [auto | sol | code | claude | terra]`", reply_to_message_id=message_id)
@@ -1039,16 +1233,6 @@ def handle_update(update):
         if text == "/reset":
             conversation_history.pop(chat_id, None)
             send_message(chat_id, "🔄 Đã làm mới lịch sử cuộc trò chuyện!", reply_to_message_id=message_id)
-            return
-
-        # Command: /memo
-        if text == "/memo":
-            mems = user_memories.get(chat_id, [])
-            if mems:
-                msg = "🧠 **Các thông tin Hermes đang ghi nhớ về anh:**\n" + "\n".join([f"- {m}" for m in mems])
-            else:
-                msg = "🧠 Hiện tại em chưa lưu thông tin ghi nhớ nào. Anh có thể nói: *'Hãy nhớ rằng tôi là lập trình viên'*."
-            send_message(chat_id, msg, reply_to_message_id=message_id)
             return
 
         # Case A: Voice Note / Audio Message
@@ -1125,14 +1309,38 @@ def handle_update(update):
         if not text:
             return
 
+        # Natural Language Skill Creation Intent: "Tạo skill mới: ..."
+        skill_intent = re.search(r'^(?:hãy\s+)?(?:tạo|học)\s+(?:kỹ\s+năng|skill)\s+(?:mới)?[:\s]*(.+)', text, re.IGNORECASE)
+        if skill_intent:
+            raw_s = skill_intent.group(1).strip()
+            chunks = [c.strip() for c in raw_s.split("|")]
+            if len(chunks) >= 3:
+                s_name, s_desc, s_inst = chunks[0], chunks[1], chunks[2]
+            else:
+                s_name = raw_s[:30]
+                s_desc = raw_s
+                s_inst = f"Khi người dùng yêu cầu, hãy áp dụng kỹ năng {raw_s} để hỗ trợ tốt nhất."
+            s_id = re.sub(r'\W+', '_', s_name.lower()).strip('_')
+            skills_registry[s_id] = {
+                "name": s_name,
+                "description": s_desc,
+                "instructions": s_inst,
+                "created_by": "user"
+            }
+            save_skills(skills_registry)
+            send_message(chat_id, f"⚡ **Đã học thành công Kỹ Năng Mới:** `{s_name}`!\nEm sẽ tự động áp dụng kỹ năng này khi anh cần!", reply_to_message_id=message_id)
+            set_message_reaction(chat_id, message_id, "🔥")
+            return
+
         # Memory intent
         mem_match = re.search(r'^(?:hãy\s+)?nhớ\s+(?:rằng|là|cho\s+tôi|giúp\s+tôi)?\s*(.+)', text, re.IGNORECASE)
         if mem_match and not any(kw in text.lower() for kw in ["sau", "lúc", "giờ", "phút"]):
             mem_fact = mem_match.group(1).strip()
-            if chat_id not in user_memories:
-                user_memories[chat_id] = []
-            user_memories[chat_id].append(mem_fact)
-            send_message(chat_id, f"🧠 **Đã ghi nhớ:** \"{mem_fact}\"\nEm sẽ luôn nhớ thông tin này trong các câu trả lời sau!", reply_to_message_id=message_id)
+            if chat_id_str not in user_memories:
+                user_memories[chat_id_str] = []
+            user_memories[chat_id_str].append(mem_fact)
+            save_memories(user_memories)
+            send_message(chat_id, f"🧠 **Đã lưu vào bộ nhớ vĩnh viễn:** \"{mem_fact}\"\nEm sẽ luôn nhớ thông tin này trong mọi cuộc trò chuyện sau!", reply_to_message_id=message_id)
             set_message_reaction(chat_id, message_id, "👍")
             return
 
@@ -1187,11 +1395,16 @@ def handle_update(update):
         else:
             user_query = text
 
+        # Match relevant skills
+        matched_skills = match_relevant_skills(text)
+        if matched_skills:
+            logger.info(f"Matched {len(matched_skills)} skills: {[s['name'] for s in matched_skills]}")
+
         # Dynamic Model Selection
         chosen_model, mode_tag = select_model_for_task(user_query, chat_id=chat_id)
         logger.info(f"Dynamic Router selected: {chosen_model} ({mode_tag}) for text: {text[:50]}")
         
-        reply = query_llm(chat_id, user_query, chosen_model=chosen_model)
+        reply = query_llm(chat_id, user_query, chosen_model=chosen_model, matched_skills=matched_skills)
         send_message(chat_id, reply, reply_to_message_id=message_id)
         set_message_reaction(chat_id, message_id, "🔥")
 
@@ -1203,7 +1416,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Generative Suite...")
+    logger.info("Starting Cloud Long Polling Loop with Self-Learning Skills & Persistent Memory...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
