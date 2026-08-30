@@ -9,6 +9,8 @@ import logging
 import threading
 import datetime
 import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 import io
 import contextlib
 from io import BytesIO
@@ -43,6 +45,7 @@ RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://hermes-bot-drl1.
 SUBSCRIPTIONS_FILE = "scheduled_subscriptions.json"
 MEMORIES_FILE = "user_memories.json"
 SKILLS_FILE = "skills_registry.json"
+TODOS_FILE = "user_todos.json"
 
 ALLOWED_USERS = set()
 for uid in ALLOWED_USERS_RAW.split(","):
@@ -56,6 +59,7 @@ conversation_history = {}
 user_model_override = {}  # {chat_id: "gpt-5.6-sol" or None}
 user_personas = {}        # {chat_id: "assistant" | "coder" | "humorous" | "teacher" | "executive"}
 pending_reminders = []    # [{"chat_id": int, "due_time": float, "text": str}]
+active_quizzes = {}       # {chat_id: {"answer": "A", "explanation": "..."}}
 MAX_HISTORY_TURNS = 12
 
 # City coordinates database for instant live weather lookup
@@ -79,7 +83,7 @@ CITY_COORDS = {
 }
 
 # ==========================================================
-# Persistent Subscriptions, Memories & Dynamic Skills
+# Persistent Subscriptions, Memories, Skills & Todos
 # ==========================================================
 
 def load_subscriptions():
@@ -189,6 +193,24 @@ def match_relevant_skills(user_text):
             matched.append(v)
     return matched
 
+def load_todos():
+    if os.path.exists(TODOS_FILE):
+        try:
+            with open(TODOS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading todos: {e}")
+    return {}
+
+def save_todos(todos):
+    try:
+        with open(TODOS_FILE, "w", encoding="utf-8") as f:
+            json.dump(todos, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving todos: {e}")
+
+user_todos = load_todos()
+
 # Flask web app for Render Keep-Alive & Health Checks
 app = Flask(__name__)
 
@@ -198,13 +220,16 @@ def health_check():
     uptime_sec = int(time.time() - START_TIME)
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Master Suite Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Ultimate Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
+            "live_news_rss_stream",
+            "interactive_todo_manager",
+            "ai_quiz_and_trivia_games",
+            "fast_crypto_shortcuts",
             "python_code_sandbox_runner",
             "ai_persona_switcher",
             "lunar_calendar_and_fengshui",
-            "ai_multilingual_translator",
             "dynamic_self_created_skills",
             "persistent_long_term_memory",
             "ai_image_generation_flux",
@@ -223,6 +248,43 @@ def health_check():
         "uptime_seconds": uptime_sec,
         "timestamp": time.time()
     }), 200
+
+# ==========================================================
+# Feature: Live News RSS Feeds
+# ==========================================================
+
+def get_live_news(topic="thoisu"):
+    rss_urls = {
+        "thoisu": ("https://vnexpress.net/rss/thoi-su.rss", "Thời Sự"),
+        "congnghe": ("https://vnexpress.net/rss/so-hoa.rss", "Công Nghệ & AI"),
+        "kinhdoanh": ("https://vnexpress.net/rss/kinh-doanh.rss", "Kinh Doanh & Tài Chính"),
+        "thethao": ("https://vnexpress.net/rss/the-thao.rss", "Thể Thao"),
+        "thegioi": ("https://vnexpress.net/rss/the-gioi.rss", "Thế Giới")
+    }
+    url, topic_name = rss_urls.get(topic, rss_urls["thoisu"])
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as response:
+            xml_data = response.read()
+        
+        root = ET.fromstring(xml_data)
+        items = root.findall(".//item")
+        
+        news_list = []
+        for item in items[:5]:
+            title = item.find("title").text if item.find("title") is not None else ""
+            link = item.find("link").text if item.find("link") is not None else ""
+            desc = item.find("description").text if item.find("description") is not None else ""
+            desc_clean = desc.split("</br>")[-1] if "</br>" in desc else desc
+            desc_clean = re.sub(r'<[^>]+>', '', desc_clean).replace("]]>", "").replace("<![CDATA[", "").strip()
+            
+            news_list.append(f"📰 **{title}**\n_{desc_clean}_\n🔗 [Đọc bài viết]({link})")
+            
+        return f"🔥 **ĐIỂM TIN NÓNG TRỰC TIẾP [{topic_name.upper()}]:**\n\n" + "\n\n".join(news_list)
+    except Exception as e:
+        logger.error(f"Error fetching news: {e}")
+        return f"⚠️ Lỗi lấy tin tức: {e}"
 
 # ==========================================================
 # Feature: Python Sandbox Runner & Utilities
@@ -348,6 +410,25 @@ def get_live_rates():
         logger.warning(f"Crypto error: {e}")
         
     return "\n\n".join(results)
+
+def get_single_crypto(sym="BTCUSDT", name="Bitcoin"):
+    try:
+        r = requests.get(f'https://data-api.binance.vision/api/v3/ticker/24hr?symbol={sym}', timeout=5)
+        data = r.json()
+        price = float(data.get('lastPrice', 0))
+        change = float(data.get('priceChangePercent', 0))
+        high = float(data.get('highPrice', 0))
+        low = float(data.get('lowPrice', 0))
+        icon = "🟢" if change >= 0 else "🔴"
+        return (
+            f"🪙 **THÔNG TIN GIÁ {name.upper()} (REAL-TIME):**\n\n"
+            f"• Giá hiện tại: **${price:,.2f}**\n"
+            f"• Biến động 24h: {icon} **{change:+.2f}%**\n"
+            f"• Giá cao nhất 24h: **${high:,.2f}**\n"
+            f"• Giá thấp nhất 24h: **${low:,.2f}**"
+        )
+    except Exception as e:
+        return f"⚠️ Lỗi tra cứu giá {name}: {e}"
 
 def is_rates_query(text):
     keywords = ["tỷ giá", "giá usd", "giá euro", "giá vàng", "giá btc", "giá bitcoin", "giá eth", "giá coin", "crypto", "tiền tệ", "usd vnd"]
@@ -607,27 +688,50 @@ def get_main_menu_keyboard():
                 {"text": "🌆 Bản Tin Tối", "callback_data": "btn_briefing_evening"}
             ],
             [
+                {"text": "📰 Tin Tức Nóng", "callback_data": "btn_news_menu"},
+                {"text": "📝 Việc Cần Làm", "callback_data": "btn_todos"}
+            ],
+            [
                 {"text": "🎨 Tạo Ảnh AI", "callback_data": "btn_help_draw"},
                 {"text": "📱 Tạo Mã QR", "callback_data": "btn_help_qr"}
             ],
             [
                 {"text": "🐍 Chạy Python", "callback_data": "btn_help_run"},
-                {"text": "📅 Âm Lịch Hôm Nay", "callback_data": "btn_lunar"}
+                {"text": "🎮 Đố Vui AI", "callback_data": "btn_quiz"}
             ],
             [
                 {"text": "🧠 Kỹ Năng & Bộ Nhớ", "callback_data": "btn_skills_memos"},
-                {"text": "🌤️ Thời Tiết Ninh Bình", "callback_data": "btn_weather"}
+                {"text": "📅 Âm Lịch Hôm Nay", "callback_data": "btn_lunar"}
             ],
             [
-                {"text": "💰 Tỷ Giá & Crypto", "callback_data": "btn_rates"},
-                {"text": "🎭 Đổi Tính Cách", "callback_data": "btn_personas"}
+                {"text": "🌤️ Thời Tiết", "callback_data": "btn_weather"},
+                {"text": "💰 Tỷ Giá & Crypto", "callback_data": "btn_rates"}
             ],
             [
-                {"text": "⚙️ Đổi Model AI", "callback_data": "btn_models"},
-                {"text": "📊 Thống Kê Bot", "callback_data": "btn_stats"}
+                {"text": "🎭 Đổi Tính Cách", "callback_data": "btn_personas"},
+                {"text": "⚙️ Đổi Model AI", "callback_data": "btn_models"}
             ],
             [
-                {"text": "🔄 Làm Mới Cuộc Trò Chuyện", "callback_data": "btn_reset"}
+                {"text": "📊 Thống Kê Bot", "callback_data": "btn_stats"},
+                {"text": "🔄 Làm Mới Chat", "callback_data": "btn_reset"}
+            ]
+        ]
+    }
+
+def get_news_menu_keyboard():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "💻 Công Nghệ & AI", "callback_data": "news_congnghe"},
+                {"text": "💼 Kinh Doanh", "callback_data": "news_kinhdoanh"}
+            ],
+            [
+                {"text": "🌐 Thời Sự Trong Nước", "callback_data": "news_thoisu"},
+                {"text": "⚽ Thể Thao", "callback_data": "news_thethao"}
+            ],
+            [
+                {"text": "🌍 Thế Giới", "callback_data": "news_thegioi"},
+                {"text": "🔙 Quay Lại Menu", "callback_data": "btn_menu_back"}
             ]
         ]
     }
@@ -903,8 +1007,8 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol", matched_skills=
         f"{persona_desc}\n\n"
         "NGUYÊN TẮC HÀNH ĐỘNG TUYỆT ĐỐI:\n"
         "1. Luôn trực tiếp trả lời, báo cáo và giải quyết yêu cầu của người dùng, không bao giờ đùn đẩy bảo người dùng tự tìm.\n"
-        "2. Bạn sở hữu Hệ Thống Kỹ Năng Tự Học (Skills Engine) và Bộ Nhớ Dài Hạn (Persistent Memory) vĩnh viễn.\n"
-        "3. Bạn có đủ các công cụ: Chạy Code Python (`/run`), Tạo Ảnh AI Flux (`/draw`), Đọc Tiếng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Tỷ Giá & Crypto, Thời Tiết, Lịch Âm Dương (`/amlich`).\n"
+        "2. Bạn sở hữu Hệ Thống Kỹ Năng Tự Học (Skills Engine), Bộ Nhớ Dài Hạn (Persistent Memory), và Quản lý Nhiệm Vụ (To-Do List).\n"
+        "3. Bạn có đủ các công cụ: Điểm Báo Tin Tức (`/news`), Chạy Code Python (`/run`), Tạo Ảnh AI Flux (`/draw`), Đọc Giọng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Tỷ Giá & Crypto, Thời Tiết, Lịch Âm Dương (`/amlich`), Đố Vui AI (`/quiz`).\n"
         "4. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
         "5. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể tạo ảnh' hay từ chối."
     )
@@ -987,6 +1091,71 @@ def handle_callback_query(callback_query):
         send_message(chat_id, "⏳ Đang tổng hợp bản tin tối...")
         msg = generate_briefing("evening", subscriptions.get(chat_id_str, {}).get("location", "Ninh Bình"), chat_id=chat_id)
         send_message(chat_id, msg)
+    elif data == "btn_news_menu":
+        send_message(chat_id, "📰 **CHỌN CHUYÊN MỤC TIN TỨC NÓNG TRỰC TIẾP:**", reply_markup=get_news_menu_keyboard())
+    elif data.startswith("news_"):
+        topic = data.replace("news_", "")
+        send_message(chat_id, "⏳ Đang cập nhật luồng tin tức...")
+        news_content = get_live_news(topic)
+        send_message(chat_id, news_content, reply_markup=get_news_menu_keyboard())
+    elif data == "btn_todos":
+        todos = user_todos.get(chat_id_str, [])
+        if todos:
+            lines = [f"{i+1}. {'✅ ~~' + t['task'] + '~~' if t['done'] else '⬜ **' + t['task'] + '**'}" for i, t in enumerate(todos)]
+            msg = "📝 **DANH SÁCH CÔNG VIỆC CỦA ANH:**\n\n" + "\n".join(lines) + "\n\n👉 Thêm việc: `/todo add [nội dung]`\n👉 Hoàn thành: `/todo done [số thứ tự]`"
+        else:
+            msg = "📝 Danh sách việc cần làm hiện đang trống!\n👉 Gõ `/todo add [nội dung]` để thêm công việc mới."
+        send_message(chat_id, msg)
+    elif data == "btn_quiz":
+        send_message(chat_id, "⏳ Hermes đang soạn câu hỏi đố vui...")
+        quiz_prompt = (
+            "Hãy tạo 1 câu hỏi đố vui kiến thức thú vị bằng tiếng Việt (chủ đề công nghệ, khoa học, đố mẹo hoặc đời sống).\n"
+            "Format trả về chính xác:\n"
+            "Câu hỏi: [Nội dung]\n"
+            "A. [Đáp án A]\n"
+            "B. [Đáp án B]\n"
+            "C. [Đáp án C]\n"
+            "D. [Đáp án D]\n"
+            "Đáp án đúng: [A/B/C/D]\n"
+            "Giải thích: [Ngắn gọn 1 câu]"
+        )
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        try:
+            r = requests.post(f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions", headers=headers, json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": quiz_prompt}], "temperature": 0.8}, timeout=15)
+            q_text = r.json()["choices"][0]["message"]["content"]
+            ans_match = re.search(r'Đáp án đúng:\s*([ABCD])', q_text, re.IGNORECASE)
+            ans = ans_match.group(1).upper() if ans_match else "A"
+            active_quizzes[chat_id_str] = {"answer": ans, "full_text": q_text}
+            
+            # Create inline answer buttons
+            q_keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🅰️ A", "callback_data": "quiz_ans_A"},
+                        {"text": "🅱️ B", "callback_data": "quiz_ans_B"}
+                    ],
+                    [
+                        {"text": "🅲 C", "callback_data": "quiz_ans_C"},
+                        {"text": "🅳 D", "callback_data": "quiz_ans_D"}
+                    ]
+                ]
+            }
+            send_message(chat_id, f"🎮 **ĐỐ VUI TRÍ TUỆ CÙNG HERMES:**\n\n{q_text.split('Đáp án đúng')[0].strip()}", reply_markup=q_keyboard)
+        except Exception as e:
+            send_message(chat_id, "⚠️ Lỗi tạo câu đố, anh bấm lại nhé!")
+    elif data.startswith("quiz_ans_"):
+        user_choice = data.replace("quiz_ans_", "")
+        quiz_data = active_quizzes.get(chat_id_str)
+        if quiz_data:
+            correct_ans = quiz_data.get("answer", "A")
+            full_txt = quiz_data.get("full_text", "")
+            if user_choice == correct_ans:
+                send_message(chat_id, f"🎉 **CHÍNH XÁC!** Anh trả lời rất xuất sắc!\n\n💡 {full_txt[full_txt.find('Giải thích:'):] if 'Giải thích:' in full_txt else ''}")
+            else:
+                send_message(chat_id, f"❌ **CHƯA ĐÚNG RỒI!**\nĐáp án chính xác là **{correct_ans}**!\n\n💡 {full_txt[full_txt.find('Giải thích:'):] if 'Giải thích:' in full_txt else ''}")
+            active_quizzes.pop(chat_id_str, None)
+        else:
+            send_message(chat_id, "⚠️ Câu đố này đã kết thúc, anh bấm **[🎮 Đố Vui AI]** để chơi câu mới nhé!")
     elif data == "btn_weather":
         send_message(chat_id, "⏳ Đang kết nối trạm thời tiết Ninh Bình...")
         w = get_live_weather("thời tiết ninh bình")
@@ -1108,18 +1277,21 @@ def handle_update(update):
         # Command: /start or /menu
         if text == "/start" or text == "/menu":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Master Suite Edition 24/7)!**\n\n"
-                "🚀 **Các Công Cụ & Tiện Ích Toàn Năng:**\n"
-                "• 🐍 **Chạy Code Python Trực Tiếp (`/run`):** Thực thi code Python và lấy kết quả trong mili-giây.\n"
-                "• 🎭 **Đổi Tính Cách AI (`/persona`):** Trợ lý, Kỹ sư Senior, Hài hước, Gia sư, Giám đốc điều hành.\n"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Ultimate Edition 24/7)!**\n\n"
+                "🚀 **Bộ Công Cụ & Siêu Năng Lực Toàn Diện:**\n"
+                "• 📰 **Điểm Báo & Tin Tức Nóng (`/news`):** Đọc tin tức công nghệ, tài chính trực tiếp.\n"
+                "• 📝 **Quản Lý Công Việc (`/todo`):** Ghi nhớ và theo dõi to-do list hàng ngày.\n"
+                "• 🎮 **Đố Vui AI Trí Tuệ (`/quiz`):** Thử thách trí tuệ với các câu đố thú vị.\n"
+                "• 🐍 **Chạy Code Python (`/run`):** Thực thi code Python và lấy kết quả trong mili-giây.\n"
+                "• 🪙 **Tra Cứu Crypto Siêu Tốc:** Gõ `/btc`, `/eth`, `/sol`, `/bnb`.\n"
+                "• 🎭 **Đổi Tính Cách AI (`/persona`):** Trợ lý, Kỹ sư Senior, Hài hước, Gia sư, Giám đốc.\n"
                 "• 📅 **Lịch Âm Dương & Can Chi (`/amlich`):** Tra cứu ngày Âm lịch Bính Ngọ & Giờ hoàng đạo.\n"
-                "• ⚡ **Tự Học & Tự Tạo Skill (`/skill`):** Dạy bot các kỹ năng chuyên môn mới theo ý anh.\n"
-                "• 💾 **Bộ Nhớ Vĩnh Viễn (`/memo`):** Lưu trữ sở thích, dự án cá nhân không bao giờ quên.\n"
-                "• 🎨 **Tạo Ảnh AI Nghệ Thuật (`/draw [mô tả]`):** Vẽ ảnh 8k sắc nét với Model Flux.1.\n"
-                "• 🔊 **Đọc Giọng Nói TTS (`/tts [văn bản]`):** Chuyển lời văn thành voice note âm thanh.\n"
-                "• 📱 **Tạo Mã QR Tức Thì (`/qr [nội dung/link]`):** Tạo mã QR cho link, WiFi, STK.\n"
-                "• 📰 **Bản Tin Sáng (07:00) & Tối (20:00):** Tự động tổng hợp thời tiết, tỷ giá, tin tức.\n"
-                "• 💰 **Tỷ Giá Ngoại Tệ & Crypto 24/7:** Giá USD, EUR, BTC, ETH trực tiếp.\n\n"
+                "• ⚡ **Tự Học & Tự Tạo Skill (`/skill`):** Dạy bot kỹ năng chuyên môn mới theo ý anh.\n"
+                "• 💾 **Bộ Nhớ Vĩnh Viễn (`/memo`):** Lưu trữ sở thích, dự án không bao giờ quên.\n"
+                "• 🎨 **Tạo Ảnh AI Nghệ Thuật (`/draw [mô tả]`):** Model Flux.1 8K sắc nét.\n"
+                "• 🔊 **Đọc Giọng Nói TTS (`/tts [văn bản]`):** Chuyển lời văn thành voice note.\n"
+                "• 📱 **Tạo Mã QR Tức Thì (`/qr [link/nội dung]`):** Tạo mã QR độ nét cao.\n"
+                "• 📰 **Bản Tin Sáng (07:00) & Tối (20:00):** Tự động gửi đúng giờ mỗi ngày.\n\n"
                 "👇 **Anh có thể chạm nhanh các nút bên dưới để trải nghiệm ngay:**"
             )
             send_message(chat_id, welcome, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
@@ -1129,22 +1301,88 @@ def handle_update(update):
         if text == "/help":
             help_text = (
                 "📖 **DANH SÁCH LỆNH VÀ CÔNG CỤ TỰ ĐỘNG**\n\n"
-                "1. 🐍 **/run [code]** — Thực thi code Python trực tiếp.\n"
-                "2. 🎭 **/persona [assistant|coder|humorous|teacher|executive]** — Đổi tính cách AI.\n"
-                "3. 📅 **/amlich** — Xem lịch Âm Dương, Giờ hoàng đạo.\n"
-                "4. ⚡ **/skill** — Quản lý và dạy kỹ năng mới cho bot:\n"
-                "   • `/skills` : Xem danh sách kỹ năng.\n"
-                "   • `/skill add [tên] | [mô tả] | [hướng dẫn]` : Tạo skill mới.\n"
-                "5. 🧠 **/memo** — Quản lý bộ nhớ dài hạn vĩnh viễn.\n"
-                "6. 🎨 **/draw [mô tả]** — Tạo ảnh AI Flux.1 sắc nét.\n"
-                "7. 🔊 **/tts [văn bản]** — Chuyển văn bản thành giọng nói Voice Note.\n"
-                "8. 📱 **/qr [link/văn bản]** — Tạo ảnh mã QR tức thì.\n"
-                "9. 🖼️ **/capture [link]** — Chụp ảnh màn hình trang web.\n"
-                "10. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối.\n"
-                "11. 📊 **/stats** — Xem thống kê hệ thống bot.\n"
-                "12. 🔄 **/reset** — Làm mới cuộc trò chuyện."
+                "1. 📰 **/news** — Xem điểm tin tức nóng trực tiếp.\n"
+                "2. 📝 **/todo [add | done | clear]** — Quản lý công việc cần làm.\n"
+                "3. 🎮 **/quiz** — Chơi đố vui trí tuệ với AI.\n"
+                "4. 🪙 **/btc, /eth, /sol, /bnb** — Xem giá Crypto thời gian thực.\n"
+                "5. 🐍 **/run [code]** — Thực thi code Python trực tiếp.\n"
+                "6. 🎭 **/persona [tên]** — Đổi tính cách & phong cách AI.\n"
+                "7. 📅 **/amlich** — Xem lịch Âm Dương, Giờ hoàng đạo.\n"
+                "8. ⚡ **/skill** — Dạy kỹ năng chuyên gia mới cho bot.\n"
+                "9. 🧠 **/memo** — Quản lý bộ nhớ vĩnh viễn.\n"
+                "10. 🎨 **/draw [mô tả]** — Tạo ảnh AI Flux.1 sắc nét.\n"
+                "11. 🔊 **/tts [văn bản]** — Chuyển văn bản thành giọng nói.\n"
+                "12. 📱 **/qr [link]** — Tạo ảnh mã QR tức thì.\n"
+                "13. 🖼️ **/capture [link]** — Chụp ảnh màn hình trang web.\n"
+                "14. 📰 **/daily [on | off | now]** — Quản lý bản tin sáng & tối.\n"
+                "15. 📊 **/stats** — Xem thống kê hệ thống bot.\n"
+                "16. 🔄 **/reset** — Làm mới cuộc trò chuyện."
             )
             send_message(chat_id, help_text, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
+            return
+
+        # Fast Crypto Shortcuts
+        if text.lower() in ["/btc", "btc", "bitcoin"]:
+            send_message(chat_id, get_single_crypto("BTCUSDT", "Bitcoin"), reply_to_message_id=message_id)
+            set_message_reaction(chat_id, message_id, "🔥")
+            return
+        if text.lower() in ["/eth", "eth", "ethereum"]:
+            send_message(chat_id, get_single_crypto("ETHUSDT", "Ethereum"), reply_to_message_id=message_id)
+            set_message_reaction(chat_id, message_id, "🔥")
+            return
+        if text.lower() in ["/sol", "sol", "solana"]:
+            send_message(chat_id, get_single_crypto("SOLUSDT", "Solana"), reply_to_message_id=message_id)
+            set_message_reaction(chat_id, message_id, "🔥")
+            return
+        if text.lower() in ["/bnb", "bnb"]:
+            send_message(chat_id, get_single_crypto("BNBUSDT", "Binance Coin"), reply_to_message_id=message_id)
+            set_message_reaction(chat_id, message_id, "🔥")
+            return
+
+        # Command: /news (Tin tức)
+        if text.startswith("/news") or text.startswith("/tin"):
+            parts = text.split()
+            topic = parts[1].lower() if len(parts) > 1 else "thoisu"
+            send_message(chat_id, get_live_news(topic), reply_to_message_id=message_id, reply_markup=get_news_menu_keyboard())
+            set_message_reaction(chat_id, message_id, "🔥")
+            return
+
+        # Command: /todo (Quản lý công việc)
+        if text.startswith("/todo"):
+            parts = text.split(maxsplit=2)
+            if chat_id_str not in user_todos:
+                user_todos[chat_id_str] = []
+                
+            if len(parts) > 1:
+                sub = parts[1].lower()
+                if sub in ["add", "them", "thêm"] and len(parts) > 2:
+                    task_text = parts[2].strip()
+                    user_todos[chat_id_str].append({"task": task_text, "done": False, "created_at": time.time()})
+                    save_todos(user_todos)
+                    send_message(chat_id, f"📝 **Đã thêm vào danh sách:** \"{task_text}\"", reply_to_message_id=message_id)
+                    return
+                elif sub in ["done", "xong"] and len(parts) > 2:
+                    idx_str = parts[2].strip()
+                    if idx_str.isdigit():
+                        idx = int(idx_str) - 1
+                        if 0 <= idx < len(user_todos[chat_id_str]):
+                            user_todos[chat_id_str][idx]["done"] = True
+                            save_todos(user_todos)
+                            send_message(chat_id, f"✅ **Đã hoàn thành:** ~~{user_todos[chat_id_str][idx]['task']}~~", reply_to_message_id=message_id)
+                            return
+                elif sub in ["clear", "xoa", "xóa"]:
+                    user_todos[chat_id_str] = [t for t in user_todos[chat_id_str] if not t["done"]]
+                    save_todos(user_todos)
+                    send_message(chat_id, "🧹 Đã dọn dẹp các công việc đã hoàn thành!", reply_to_message_id=message_id)
+                    return
+
+            todos = user_todos.get(chat_id_str, [])
+            if todos:
+                lines = [f"{i+1}. {'✅ ~~' + t['task'] + '~~' if t['done'] else '⬜ **' + t['task'] + '**'}" for i, t in enumerate(todos)]
+                msg = "📝 **DANH SÁCH CÔNG VIỆC CỦA ANH:**\n\n" + "\n".join(lines) + "\n\n👉 Thêm việc: `/todo add [nội dung]`\n👉 Đánh dấu xong: `/todo done [số]`\n👉 Dọn việc xong: `/todo clear`"
+            else:
+                msg = "📝 Danh sách việc cần làm hiện đang trống!\n👉 Gõ `/todo add [nội dung]` để thêm công việc mới."
+            send_message(chat_id, msg, reply_to_message_id=message_id)
             return
 
         # Command: /run (Python Sandbox Code Execution)
@@ -1154,6 +1392,11 @@ def handle_update(update):
             res_output = run_python_sandbox(code_snippet)
             send_message(chat_id, res_output, reply_to_message_id=message_id)
             set_message_reaction(chat_id, message_id, "🔥")
+            return
+
+        # Command: /quiz (Đố vui AI)
+        if text in ["/quiz", "đố vui", "chơi game", "câu đố"]:
+            handle_callback_query({"id": "0", "data": "btn_quiz", "message": {"chat": {"id": chat_id}}})
             return
 
         # Command: /amlich or /licham (Lịch vạn niên & Can Chi)
@@ -1188,6 +1431,7 @@ def handle_update(update):
                 f"• 🎭 **Tính cách hiện tại:** `{current_p}`\n"
                 f"• 💾 **Ký ức đã lưu trong bộ nhớ:** `{len(user_memories.get(chat_id_str, []))}` mục\n"
                 f"• ⚡ **Số kỹ năng (Skills) đã đăng ký:** `{len(skills_registry)}` kỹ năng\n"
+                f"• 📝 **Số công việc đang quản lý:** `{len(user_todos.get(chat_id_str, []))}` mục\n"
                 f"• 🌐 **Trạng thái máy chủ:** `100% Hoạt động & Không bao giờ ngủ (Anti-Sleep Active)`"
             )
             send_message(chat_id, msg, reply_to_message_id=message_id)
@@ -1578,7 +1822,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Master Suite...")
+    logger.info("Starting Cloud Long Polling Loop with Ultimate Suite...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
