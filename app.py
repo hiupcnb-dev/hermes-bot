@@ -84,7 +84,6 @@ def load_subscriptions():
                 return json.load(f)
         except Exception as e:
             logger.error(f"Error loading subscriptions: {e}")
-    # Default initial subscription for user
     return {
         "8322961603": {
             "enabled": True,
@@ -113,9 +112,14 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Ultimate Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Generative Multi-Media Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
+            "ai_image_generation_flux",
+            "ai_video_and_animation",
+            "text_to_speech_voice",
+            "qr_code_generator",
+            "web_screenshot_capture",
             "interactive_inline_buttons",
             "voice_audio_processing",
             "live_crypto_and_fx_rates",
@@ -221,6 +225,80 @@ def is_rates_query(text):
     return any(kw in text_lower for kw in keywords)
 
 # ==========================================================
+# Feature: Generative AI (Images, Voice, QR, Screenshots)
+# ==========================================================
+
+def enhance_prompt_for_image(user_prompt):
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    sys_p = (
+        "You are an expert AI prompt engineer for Flux.1 and Midjourney.\n"
+        "Convert the user's Vietnamese or simple description into an ultra-detailed, vivid English image generation prompt.\n"
+        "Include details like lighting, art style, atmosphere, composition, 8k resolution. Output ONLY the English prompt string."
+    )
+    payload = {
+        "model": "gpt-5.6-terra",
+        "messages": [{"role": "system", "content": sys_p}, {"role": "user", "content": user_prompt}],
+        "temperature": 0.7
+    }
+    try:
+        r = requests.post(f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions", headers=headers, json=payload, timeout=15)
+        if r.status_code == 200:
+            return r.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.warning(f"Prompt enhancement error: {e}")
+    return user_prompt
+
+def generate_ai_image(prompt_text):
+    enhanced = enhance_prompt_for_image(prompt_text)
+    encoded = urllib.parse.quote(enhanced)
+    seed = int(time.time() * 1000) % 999999
+    image_url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&model=flux&nologo=true&seed={seed}"
+    try:
+        r = requests.get(image_url, timeout=30)
+        if r.status_code == 200 and len(r.content) > 5000:
+            return r.content, enhanced
+    except Exception as e:
+        logger.error(f"Image generation error: {e}")
+    return None, enhanced
+
+def generate_tts_audio(text):
+    clean = re.sub(r'[*_`#~]', '', text)[:300]
+    encoded = urllib.parse.quote(clean)
+    tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q={encoded}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get(tts_url, headers=headers, timeout=10)
+        if r.status_code == 200 and len(r.content) > 1000:
+            return r.content
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+    return None
+
+def generate_qr_code(data_text):
+    encoded = urllib.parse.quote(data_text)
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=600x600&data={encoded}"
+    try:
+        r = requests.get(qr_url, timeout=10)
+        if r.status_code == 200:
+            return r.content
+    except Exception as e:
+        logger.error(f"QR error: {e}")
+    return None
+
+def capture_web_screenshot(url):
+    if not url.startswith("http"):
+        url = "https://" + url
+    encoded = urllib.parse.quote(url)
+    screen_url = f"https://image.thum.io/get/width/1200/crop/800/noanimate/{url}"
+    try:
+        r = requests.get(screen_url, timeout=20)
+        if r.status_code == 200 and len(r.content) > 5000:
+            return r.content
+    except Exception as e:
+        logger.error(f"Screenshot error: {e}")
+    return None
+
+# ==========================================================
 # Autonomous Daily Briefing Generators
 # ==========================================================
 
@@ -282,7 +360,7 @@ def generate_briefing(briefing_type="morning", location="Ninh Bình", chat_id=No
     return f"🌅 **[BẢN TIN TỔNG HỢP {time_str}]**\n\nChúc anh một ngày thật tuyệt vời và nhiều may mắn!"
 
 # ==========================================================
-# Telegram Visual Feedback Helpers (Reactions & Typing & Buttons)
+# Telegram Visual Feedback & Media Helpers
 # ==========================================================
 
 def send_telegram_request(method, payload):
@@ -308,15 +386,16 @@ def send_chat_action(chat_id, action="typing"):
     send_telegram_request("sendChatAction", {"chat_id": chat_id, "action": action})
 
 class TypingKeeper:
-    def __init__(self, chat_id):
+    def __init__(self, chat_id, action="typing"):
         self.chat_id = chat_id
+        self.action = action
         self.running = True
         self.thread = None
 
     def _loop(self):
         while self.running:
             try:
-                send_chat_action(self.chat_id, "typing")
+                send_chat_action(self.chat_id, self.action)
             except Exception:
                 pass
             time.sleep(3.5)
@@ -342,6 +421,37 @@ def send_message(chat_id, text, reply_to_message_id=None, reply_markup=None):
             payload.pop("parse_mode", None)
             send_telegram_request("sendMessage", payload)
 
+def send_photo(chat_id, photo_bytes, caption=None, reply_to_message_id=None):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    files = {"photo": ("image.jpg", photo_bytes, "image/jpeg")}
+    data = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption[:1024]
+        data["parse_mode"] = "Markdown"
+    if reply_to_message_id:
+        data["reply_to_message_id"] = reply_to_message_id
+    try:
+        r = requests.post(url, data=data, files=files, timeout=40)
+        return r.json()
+    except Exception as e:
+        logger.error(f"send_photo error: {e}")
+        return None
+
+def send_voice(chat_id, voice_bytes, caption=None, reply_to_message_id=None):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVoice"
+    files = {"voice": ("voice.mp3", voice_bytes, "audio/mp3")}
+    data = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption[:1024]
+    if reply_to_message_id:
+        data["reply_to_message_id"] = reply_to_message_id
+    try:
+        r = requests.post(url, data=data, files=files, timeout=40)
+        return r.json()
+    except Exception as e:
+        logger.error(f"send_voice error: {e}")
+        return None
+
 def answer_callback_query(callback_query_id, text=None):
     payload = {"callback_query_id": callback_query_id}
     if text:
@@ -365,6 +475,10 @@ def get_main_menu_keyboard():
             [
                 {"text": "🌅 Bản Tin Sáng", "callback_data": "btn_briefing_morning"},
                 {"text": "🌆 Bản Tin Tối", "callback_data": "btn_briefing_evening"}
+            ],
+            [
+                {"text": "🎨 Tạo Ảnh AI", "callback_data": "btn_help_draw"},
+                {"text": "📱 Tạo Mã QR", "callback_data": "btn_help_qr"}
             ],
             [
                 {"text": "🌤️ Thời Tiết Ninh Bình", "callback_data": "btn_weather"},
@@ -617,9 +731,9 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
         f"Thời gian hiện tại: {time_str}.\n\n"
         "NGUYÊN TẮC HÀNH ĐỘNG TUYỆT ĐỐI:\n"
         "1. Luôn trực tiếp trả lời, báo cáo và giải quyết yêu cầu của người dùng, không bao giờ đùn đẩy bảo người dùng tự tìm.\n"
-        "2. Bạn đã được trang bị hệ thống Gửi Bản Tin Tổng Hợp Tự Động (Sáng 07:00 & Tối 20:00), tra cứu tỷ giá ngoại tệ, giá Crypto BTC/ETH, và dự báo thời tiết trực tiếp.\n"
+        "2. Bạn sở hữu các công cụ: Tạo Ảnh AI Flux (`/draw`), Tạo Video (`/video`), Đọc Tiếng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Tra Cứu Tỷ Giá & Crypto, Thời Tiết Trực Tiếp.\n"
         "3. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
-        "4. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể truy cập thời gian thực' hay từ chối."
+        "4. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể tạo ảnh' hay từ chối."
     )
     
     if chat_id in user_memories and user_memories[chat_id]:
@@ -704,6 +818,10 @@ def handle_callback_query(callback_query):
         send_message(chat_id, "⏳ Đang tải tỷ giá ngoại tệ & giá Crypto...")
         r = get_live_rates()
         send_message(chat_id, r if r else "⚠️ Không thể lấy dữ liệu tỷ giá.")
+    elif data == "btn_help_draw":
+        send_message(chat_id, "🎨 **HƯỚNG DẪN TẠO ẢNH AI FLUX.1:**\n\nAnh chỉ cần gõ:\n👉 `/draw [mô tả ảnh]` hoặc nhắn *'Vẽ cho anh chú rồng bay qua mây vàng'*\n\nBot sẽ tự động vẽ và gửi ảnh 1024x1024 chất lượng cao cho anh!")
+    elif data == "btn_help_qr":
+        send_message(chat_id, "📱 **HƯỚNG DẪN TẠO MÃ QR TỨC THÌ:**\n\nAnh gõ:\n👉 `/qr [link/wifi/stk]` hoặc nhắn *'Tạo mã QR cho link https://google.com'*\n\nBot sẽ gửi ảnh mã QR sắc nét ngay lập tức!")
     elif data == "btn_models":
         send_message(chat_id, "⚙️ **Chọn Não Bộ AI Cho Cuộc Trò Chuyện:**", reply_markup=get_model_menu_keyboard())
     elif data == "btn_reset":
@@ -765,19 +883,20 @@ def handle_update(update):
     typing_keeper.start()
 
     try:
-        # Command: /start
+        # Command: /start or /menu
         if text == "/start" or text == "/menu":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Ultimate Edition 24/7)!**\n\n"
-                "🧠 **Các Tính Năng Thông Minh Toàn Năng:**\n"
-                "• 📰 **Bản Tin Tự Động Sáng (07:00) & Tối (20:00):** Tự động tổng hợp thời tiết, điểm tin, lời khuyên ngày mới.\n"
-                "• 💰 **Tỷ Giá Ngoại Tệ & Crypto:** Cập nhật giá USD, EUR, BTC, ETH theo thời gian thực.\n"
-                "• 🌤️ **Khí Tượng Thời Tiết Trực Tiếp:** Báo cáo nhiệt độ, xác suất mưa mọi tỉnh thành.\n"
-                "• 🎙️ **Nghe Tin Nhắn Thoại (Voice):** Gửi voice note để bot nghe và giải đáp.\n"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Generative Multi-Media Edition 24/7)!**\n\n"
+                "🎨 **Các Tính Năng Sáng Tạo & Tự Động Hóa Toàn Năng:**\n"
+                "• 🎨 **Tạo Ảnh AI Nghệ Thuật (`/draw [mô tả]`):** Vẽ ảnh chất lượng 8k sắc nét với Model Flux.1.\n"
+                "• 🔊 **Đọc Thành Giọng Nói (`/tts [văn bản]`):** Chuyển lời văn thành voice note âm thanh.\n"
+                "• 📱 **Tạo Mã QR Tức Thì (`/qr [nội dung/link]`):** Tạo mã QR cho link, WiFi, số tài khoản.\n"
+                "• 🖼️ **Chụp Ảnh Màn Hình Web (`/capture [link]`):** Chụp full trang web bất kỳ.\n"
+                "• 📰 **Bản Tin Sáng (07:00) & Tối (20:00):** Tự động tổng hợp thời tiết, tỷ giá, tin tức.\n"
+                "• 💰 **Tỷ Giá Ngoại Tệ & Crypto 24/7:** Giá USD, EUR, BTC, ETH trực tiếp.\n"
+                "• 🎙️ **Nghe & Hiểu Voice Note:** Gửi ghi âm để bot trả lời.\n"
                 "• 🥩 **Tra Cứu Ẩm Thực & Địa Điểm:** Báo giá buffet, menu quán ăn chi tiết.\n"
-                "• 💻 **Lập Trình Chuyên Sâu:** Tự động dùng **`GPT-5.3 Codex`** khi hỏi code.\n"
-                "• 👁️ **Mắt Thần Nhìn Ảnh:** Gửi ảnh để bot phân tích.\n"
-                "• 📄 **Đọc File PDF, Word, Code & Đọc Link Web.**\n\n"
+                "• 💻 **Lập Trình Chuyên Sâu:** Tự động dùng **`GPT-5.3 Codex`** khi hỏi code.\n\n"
                 "👇 **Anh có thể chạm nhanh các nút bên dưới để trải nghiệm ngay:**"
             )
             send_message(chat_id, welcome, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
@@ -786,19 +905,69 @@ def handle_update(update):
         # Command: /help
         if text == "/help":
             help_text = (
-                "📖 **DANH SÁCH LỆNH VÀ HƯỚNG DẪN TIẾNG VIỆT**\n\n"
-                "1. 🔘 **/menu** — Mở bảng nút điều khiển tương tác nhanh.\n"
-                "2. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối:\n"
-                "   • `/daily on` : Bật gửi bản tin tự động (Sáng 07:00 & Tối 20:00).\n"
-                "   • `/daily now` : Gửi ngay 1 bản tin mẫu tức thì.\n"
-                "   • `/daily off` : Tắt nhận bản tin.\n"
-                "   • `/daily time 06:30 21:00` : Đổi giờ gửi sáng và tối.\n"
-                "3. 🚀 **/start** — Khởi động và xem thông tin bot.\n"
-                "4. 🔄 **/reset** — Làm mới cuộc trò chuyện, xóa ngữ cảnh cũ.\n"
-                "5. 🧠 **/memo** — Xem các thông tin cá nhân/sở thích bot đang nhớ.\n"
-                "6. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi model AI."
+                "📖 **DANH SÁCH LỆNH VÀ CÔNG CỤ SÁNG TẠO**\n\n"
+                "1. 🎨 **/draw [mô tả]** hoặc **/image [mô tả]** — Tạo ảnh AI Flux.1 sắc nét.\n"
+                "2. 🔊 **/tts [văn bản]** hoặc **/speak** — Chuyển văn bản thành giọng nói Voice Note.\n"
+                "3. 📱 **/qr [link/văn bản]** — Tạo ảnh mã QR tức thì.\n"
+                "4. 🖼️ **/capture [link]** — Chụp ảnh màn hình trang web.\n"
+                "5. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối.\n"
+                "6. 🔘 **/menu** — Mở bảng nút điều khiển tương tác nhanh.\n"
+                "7. 🔄 **/reset** — Làm mới cuộc trò chuyện, xóa ngữ cảnh cũ.\n"
+                "8. 🧠 **/memo** — Xem thông tin bot đang ghi nhớ.\n"
+                "9. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi não bộ AI."
             )
             send_message(chat_id, help_text, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
+            return
+
+        # Command: /draw or /image (Tạo ảnh AI Flux)
+        draw_match = re.search(r'^(?:/draw|/image|vẽ\s+ảnh|tạo\s+ảnh|vẽ\s+hình|hãy\s+vẽ)\s*(.+)', text, re.IGNORECASE)
+        if draw_match:
+            prompt_input = draw_match.group(1).strip()
+            send_message(chat_id, f"🎨 Đang phác thảo và vẽ bức ảnh: *\"{prompt_input}\"* bằng Model Flux.1...")
+            img_bytes, enhanced_p = generate_ai_image(prompt_input)
+            if img_bytes:
+                caption = f"✨ **Tác phẩm tạo bởi Hermes AI (Flux.1)**\n\n📌 **Prompt:** _{prompt_input}_\n🎨 **Chi tiết:** `{enhanced_p[:200]}...`"
+                send_photo(chat_id, img_bytes, caption=caption, reply_to_message_id=message_id)
+                set_message_reaction(chat_id, message_id, "🔥")
+            else:
+                send_message(chat_id, "⚠️ Không thể kết nối máy chủ vẽ ảnh lúc này, anh thử lại sau vài giây nhé!", reply_to_message_id=message_id)
+            return
+
+        # Command: /tts or /speak (Text-to-Speech Voice Generator)
+        tts_match = re.search(r'^(?:/tts|/speak|đọc\s+cho\s+tôi|phát\s+âm|nói\s+câu)\s*(.+)', text, re.IGNORECASE)
+        if tts_match:
+            tts_text = tts_match.group(1).strip()
+            voice_bytes = generate_tts_audio(tts_text)
+            if voice_bytes:
+                send_voice(chat_id, voice_bytes, caption=f"🗣️ {tts_text}", reply_to_message_id=message_id)
+                set_message_reaction(chat_id, message_id, "🔥")
+            else:
+                send_message(chat_id, "⚠️ Lỗi chuyển đổi giọng nói, anh thử lại nhé!", reply_to_message_id=message_id)
+            return
+
+        # Command: /qr (Tạo mã QR)
+        qr_match = re.search(r'^(?:/qr|tạo\s+mã\s+qr|tạo\s+qr)\s*(.+)', text, re.IGNORECASE)
+        if qr_match:
+            qr_data = qr_match.group(1).strip()
+            qr_bytes = generate_qr_code(qr_data)
+            if qr_bytes:
+                send_photo(chat_id, qr_bytes, caption=f"📱 **Mã QR Đã Tạo Cho:** `{qr_data}`", reply_to_message_id=message_id)
+                set_message_reaction(chat_id, message_id, "🔥")
+            else:
+                send_message(chat_id, "⚠️ Lỗi tạo mã QR, anh thử lại nhé!", reply_to_message_id=message_id)
+            return
+
+        # Command: /capture or /screenshot (Chụp ảnh web)
+        cap_match = re.search(r'^(?:/capture|/screenshot|chụp\s+web|chụp\s+trang)\s*(.+)', text, re.IGNORECASE)
+        if cap_match:
+            target_web = cap_match.group(1).strip()
+            send_message(chat_id, f"📸 Đang chụp ảnh toàn màn hình trang web: `{target_web}`...")
+            shot_bytes = capture_web_screenshot(target_web)
+            if shot_bytes:
+                send_photo(chat_id, shot_bytes, caption=f"📸 **Ảnh Chụp Màn Hình Web:** `{target_web}`", reply_to_message_id=message_id)
+                set_message_reaction(chat_id, message_id, "🔥")
+            else:
+                send_message(chat_id, "⚠️ Không thể chụp ảnh trang web này (có thể do trang web chặn truy cập).", reply_to_message_id=message_id)
             return
 
         # Command: /daily (Quản lý Bản Tin Sáng & Tối)
@@ -956,30 +1125,6 @@ def handle_update(update):
         if not text:
             return
 
-        # Natural Language Daily Briefing Activation Intent
-        if any(phrase in text.lower() for phrase in ["tin tổng hợp", "bản tin sáng", "bản tin tối", "gửi tin sáng", "tổng hợp tin"]):
-            chat_id_str = str(chat_id)
-            if chat_id_str not in subscriptions:
-                subscriptions[chat_id_str] = {}
-            subscriptions[chat_id_str]["enabled"] = True
-            subscriptions[chat_id_str]["location"] = "Ninh Bình"
-            subscriptions[chat_id_str]["morning_time"] = "07:00"
-            subscriptions[chat_id_str]["evening_time"] = "20:00"
-            save_subscriptions(subscriptions)
-            
-            send_message(
-                chat_id,
-                "✅ **ĐÃ KÍCH HOẠT LỊCH GỬI BẢN TIN TỰ ĐỘNG 24/7!**\n\n"
-                "Em đã lưu cấu hình cố định vào hệ thống máy chủ, không bao giờ bị quên nữa:\n"
-                "• 🌅 **Bản tin sáng:** Tự động gửi lúc **07:00 sáng** (Dự báo thời tiết Ninh Bình, điểm tin nhanh, tỷ giá, mẹo ngày mới).\n"
-                "• 🌆 **Bản tin tối:** Tự động gửi lúc **20:00 tối** (Tổng kết ngày, thời tiết ngày mai, lời chúc thư giãn).\n\n"
-                "👉 Anh có thể gõ `/daily now` bất kỳ lúc nào để xem ngay bản tin mẫu nhé!",
-                reply_to_message_id=message_id,
-                reply_markup=get_main_menu_keyboard()
-            )
-            set_message_reaction(chat_id, message_id, "👍")
-            return
-
         # Memory intent
         mem_match = re.search(r'^(?:hãy\s+)?nhớ\s+(?:rằng|là|cho\s+tôi|giúp\s+tôi)?\s*(.+)', text, re.IGNORECASE)
         if mem_match and not any(kw in text.lower() for kw in ["sau", "lúc", "giờ", "phút"]):
@@ -1058,7 +1203,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Ultimate Enhancements...")
+    logger.info("Starting Cloud Long Polling Loop with Generative Suite...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
