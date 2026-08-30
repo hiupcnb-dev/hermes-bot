@@ -38,6 +38,8 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://apithat.dev/v1")
 ALLOWED_USERS_RAW = os.getenv("TELEGRAM_ALLOWED_USERS", "8322961603")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://hermes-bot-drl1.onrender.com")
 
+SUBSCRIPTIONS_FILE = "scheduled_subscriptions.json"
+
 ALLOWED_USERS = set()
 for uid in ALLOWED_USERS_RAW.split(","):
     uid = uid.strip()
@@ -71,6 +73,38 @@ CITY_COORDS = {
     "tam đảo": (21.46, 105.64)
 }
 
+# ==========================================================
+# Persistent Subscriptions Database
+# ==========================================================
+
+def load_subscriptions():
+    if os.path.exists(SUBSCRIPTIONS_FILE):
+        try:
+            with open(SUBSCRIPTIONS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading subscriptions: {e}")
+    # Default initial subscription for user
+    return {
+        "8322961603": {
+            "enabled": True,
+            "location": "Ninh Bình",
+            "morning_time": "07:00",
+            "evening_time": "20:00",
+            "last_morning_date": "",
+            "last_evening_date": ""
+        }
+    }
+
+def save_subscriptions(subs):
+    try:
+        with open(SUBSCRIPTIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(subs, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving subscriptions: {e}")
+
+subscriptions = load_subscriptions()
+
 # Flask web app for Render Keep-Alive & Health Checks
 app = Flask(__name__)
 
@@ -79,9 +113,11 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Autonomous Bot 24/7 (Live Weather & Date Grounding Edition)",
+        "service": "Hermes Telegram Autonomous Bot 24/7 (Persistent Daily Briefing Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
+            "persistent_daily_briefings",
+            "morning_and_evening_cron",
             "live_realtime_weather",
             "date_time_grounding",
             "url_web_page_reader",
@@ -93,6 +129,7 @@ def health_check():
             "reminders_and_memory", 
             "24_7_long_polling"
         ],
+        "active_subscribers": [k for k, v in subscriptions.items() if v.get("enabled")],
         "pending_reminders_count": len(pending_reminders),
         "timestamp": time.time()
     }), 200
@@ -139,6 +176,64 @@ def is_weather_query(text):
     keywords = ["thời tiết", "trời mưa", "có mưa không", "nhiệt độ", "dự báo", "nắng", "gió", "2/9 thời tiết", "thời tiết hôm nay", "thời tiết ngày mai"]
     text_lower = text.lower()
     return any(kw in text_lower for kw in keywords)
+
+# ==========================================================
+# Autonomous Daily Briefing Generators
+# ==========================================================
+
+def generate_briefing(briefing_type="morning", location="Ninh Bình", chat_id=None):
+    now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+    time_str = now_vn.strftime("%A, ngày %d/%m/%Y")
+    weather_info = get_live_weather(location)
+    
+    mem_info = ""
+    if chat_id and chat_id in user_memories and user_memories[chat_id]:
+        mem_info = "\nGhi chú/việc cần lưu ý của người dùng:\n" + "\n".join([f"- {m}" for m in user_memories[chat_id]])
+        
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    if briefing_type == "morning":
+        prompt = (
+            f"Bạn là Hermes - Siêu Trợ Lý AI cao cấp.\n"
+            f"Hãy soạn một **BẢN TIN TỔNG HỢP BUỔI SÁNG** ({time_str}) thật chuyên nghiệp, năng lượng và tinh tế cho người dùng tại {location}.\n"
+            f"Dữ liệu thời tiết thực tế:\n{weather_info}\n{mem_info}\n\n"
+            "Cấu trúc bản tin gồm:\n"
+            "1. 🌅 **Lời chào buổi sáng & Ngày tháng**\n"
+            "2. 🌤️ **Dự báo Thời Tiết Trong Ngày** (Nhiệt độ, xác suất mưa, lời khuyên trang phục/hoạt động)\n"
+            "3. 📰 **Điểm Tin Nhanh & Xu Hướng Trong Ngày** (Công nghệ AI, đời sống số, mẹo năng suất)\n"
+            "4. 💡 **Lời chúc ngày mới & Câu nói truyền cảm hứng**\n"
+            "Trình bày chuẩn Markdown, icon sinh động, bố cục thoáng đẹp mắt trên Telegram."
+        )
+    else:
+        prompt = (
+            f"Bạn là Hermes - Siêu Trợ Lý AI cao cấp.\n"
+            f"Hãy soạn một **BẢN TIN TỔNG KẾT BUỔI TỐI** ({time_str}) thật ấm áp, thư giãn và hữu ích cho người dùng tại {location}.\n"
+            f"Dữ liệu thời tiết:\n{weather_info}\n{mem_info}\n\n"
+            "Cấu trúc bản tin gồm:\n"
+            "1. 🌆 **Lời chào buổi tối & Lời chúc thư giãn sau một ngày làm việc**\n"
+            "2. 🌙 **Dự Báo Thời Tiết & Lưu Ý Cho Ngày Mai**\n"
+            "3. 📌 **Góc Nhìn & Ý Tưởng Tích Cực Trước Khi Nghỉ Ngơi**\n"
+            "4. 🛌 **Lời chúc ngủ ngon & Nạp lại năng lượng**\n"
+            "Trình bày chuẩn Markdown, icon ấm áp, bố cục dễ đọc."
+        )
+        
+    for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gemini-3.7-flash"]:
+        try:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7
+            }
+            r = requests.post(f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions", headers=headers, json=payload, timeout=45)
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.warning(f"Error generating briefing with {model}: {e}")
+            
+    return f"🌅 **[BẢN TIN TỔNG HỢP {time_str}]**\n\nChúc anh một ngày thật tuyệt vời và nhiều may mắn!"
 
 # ==========================================================
 # Telegram Visual Feedback Helpers (Reactions & Typing)
@@ -235,8 +330,8 @@ def fetch_url_content(url):
 # ==========================================================
 
 def select_model_for_task(text, has_photo=False, has_doc=False, file_name="", chat_id=None):
-    if chat_id and chat_id in user_model_override and user_model_override[chat_id]:
-        override = user_model_override[chat_id]
+    if chat_id and str(chat_id) in user_model_override and user_model_override[str(chat_id)]:
+        override = user_model_override[str(chat_id)]
         return override, f"⚙️ [Chế độ Cố định: {override}]"
 
     if has_photo:
@@ -296,7 +391,7 @@ def anti_sleep_keep_alive():
         time.sleep(5 * 60)
 
 # ==========================================================
-# Feature: Reminder Parser & Background Scheduler
+# Feature: Daily Briefing Cron Loop & One-Off Reminders
 # ==========================================================
 
 def parse_reminder(text):
@@ -332,9 +427,46 @@ def parse_reminder(text):
     return None
 
 def reminder_scheduler_loop():
-    logger.info("Reminder scheduler loop started.")
+    logger.info("Unified Scheduler (Daily Briefings + Reminders) started.")
     while True:
         try:
+            now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+            today_str = now_vn.strftime("%Y-%m-%d")
+            time_now_str = now_vn.strftime("%H:%M")
+            hour_int = now_vn.hour
+            minute_int = now_vn.minute
+            
+            # 1. Process Daily Briefing Subscriptions
+            for chat_id_str, config in list(subscriptions.items()):
+                if not config.get("enabled", True):
+                    continue
+                    
+                chat_id = int(chat_id_str) if chat_id_str.isdigit() else chat_id_str
+                location = config.get("location", "Ninh Bình")
+                morning_time = config.get("morning_time", "07:00")
+                evening_time = config.get("evening_time", "20:00")
+                
+                # Morning Briefing Trigger (07:00 or within morning window 07:00 - 07:15)
+                m_h, m_m = [int(x) for x in morning_time.split(":")]
+                if (hour_int == m_h and minute_int >= m_m and minute_int <= m_m + 15) or (hour_int == m_h and config.get("last_morning_date") != today_str):
+                    if config.get("last_morning_date") != today_str:
+                        logger.info(f"Triggering Morning Briefing for {chat_id} at {today_str} {time_now_str}")
+                        briefing_msg = generate_briefing("morning", location, chat_id=chat_id)
+                        send_message(chat_id, briefing_msg)
+                        config["last_morning_date"] = today_str
+                        save_subscriptions(subscriptions)
+                        
+                # Evening Briefing Trigger (20:00 or within evening window 20:00 - 20:15)
+                e_h, e_m = [int(x) for x in evening_time.split(":")]
+                if (hour_int == e_h and minute_int >= e_m and minute_int <= e_m + 15) or (hour_int == e_h and config.get("last_evening_date") != today_str):
+                    if config.get("last_evening_date") != today_str:
+                        logger.info(f"Triggering Evening Briefing for {chat_id} at {today_str} {time_now_str}")
+                        briefing_msg = generate_briefing("evening", location, chat_id=chat_id)
+                        send_message(chat_id, briefing_msg)
+                        config["last_evening_date"] = today_str
+                        save_subscriptions(subscriptions)
+
+            # 2. Process One-off Reminders
             now = time.time()
             triggered = []
             for item in list(pending_reminders):
@@ -349,8 +481,8 @@ def reminder_scheduler_loop():
                     f"⏰ **[NHẮC NHỞ TỪ HERMES]**\n\nĐã đến giờ anh ơi: **{item['text']}**!"
                 )
         except Exception as e:
-            logger.error(f"Error in reminder scheduler: {e}")
-        time.sleep(5)
+            logger.error(f"Error in scheduler loop: {e}", exc_info=True)
+        time.sleep(20)
 
 # ==========================================================
 # Feature: File & Document Extraction
@@ -396,9 +528,10 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
         f"Thời gian hiện tại: {time_str}.\n\n"
         "NGUYÊN TẮC HÀNH ĐỘNG TUYỆT ĐỐI:\n"
         "1. Luôn trực tiếp trả lời, báo cáo và giải quyết yêu cầu của người dùng, không bao giờ đùn đẩy bảo người dùng tự tìm.\n"
-        "2. Khi có dữ liệu thời tiết/thực tế được cung cấp, hãy đọc và phân tích chi tiết nhiệt độ, xác suất mưa, tư vấn thời điểm đi chơi/ăn uống thích hợp nhất.\n"
-        "3. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
-        "4. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể truy cập thời gian thực' hay từ chối."
+        "2. Bạn đã được trang bị hệ thống Gửi Bản Tin Tổng Hợp Tự Động (Sáng 07:00 & Tối 20:00). Khi người dùng hỏi về bản tin, hãy xác nhận bạn đã kích hoạt lịch gửi tự động hàng ngày.\n"
+        "3. Khi có dữ liệu thời tiết/thực tế được cung cấp, hãy đọc và phân tích chi tiết nhiệt độ, xác suất mưa, tư vấn thời điểm đi chơi/ăn uống thích hợp nhất.\n"
+        "4. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
+        "5. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể truy cập thời gian thực' hay từ chối."
     )
     
     if chat_id in user_memories and user_memories[chat_id]:
@@ -490,16 +623,19 @@ def handle_update(update):
         # Command: /start
         if text == "/start":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Autonomous Live Edition 24/7)!**\n\n"
-                "🧠 **Các Tính Năng Tự Động Toàn Năng:**\n"
-                "• 🌤️ **Dữ Liệu Khí Tượng Thời Tiết Trực Tiếp:** Báo cáo thời tiết chuẩn xác theo thời gian thực tại mọi tỉnh thành.\n"
-                "• 🥩 **Tra cứu Ẩm Thực & Địa Điểm:** Tự động tra cứu và báo cáo chi tiết mọi nhà hàng, bảng giá, thực đơn.\n"
-                "• 💻 **Lập Trình Chuyên Sâu:** Tự động dùng **`GPT-5.3 Codex`** khi hỏi code, sửa bug.\n"
-                "• 🧠 **Siêu Trí Tuệ Flagship:** Dùng **`GPT-5.6 Sol`** giải quyết mọi vấn đề phức tạp.\n"
-                "• 👁️ **Mắt Thần Nhìn Ảnh:** Gửi ảnh để bot phân tích chi tiết.\n"
-                "• 📄 **Đọc File & Link:** Đọc PDF, Word, Code và link web.\n"
-                "• ⏰ **Hẹn Giờ & Ghi Nhớ:** Tự động nhắc nhở và lưu trí nhớ cá nhân.\n\n"
-                "🛠️ **Lệnh điều khiển:** `/help`, `/model`, `/reset`, `/memo`"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Bản Tự Động Hóa 24/7)!**\n\n"
+                "🧠 **Các Tính Năng Tự Động Nổi Bật:**\n"
+                "• 📰 **Bản Tin Tự Động Sáng & Tối:** Tự động gửi tin tổng hợp thời tiết, điểm tin mỗi ngày lúc **07:00 sáng** và **20:00 tối**.\n"
+                "• 🌤️ **Khí Tượng Thời Gian Thực:** Lấy nhiệt độ, xác suất mưa mọi tỉnh thành.\n"
+                "• 🥩 **Tra Cứu Ẩm Thực & Địa Điểm:** Báo giá buffet, menu quán ăn chi tiết.\n"
+                "• 💻 **Lập Trình Chuyên Sâu:** Tự động dùng **`GPT-5.3 Codex`** khi hỏi code.\n"
+                "• 👁️ **Mắt Thần Nhìn Ảnh:** Gửi ảnh để bot phân tích.\n"
+                "• 📄 **Đọc File & Link:** Đọc PDF, Word, Code và link web.\n\n"
+                "🛠️ **Lệnh điều khiển:**\n"
+                "• `/daily on` — Bật nhận bản tin sáng & tối\n"
+                "• `/daily now` — Xem ngay bản tin mẫu\n"
+                "• `/model [sol | code | terra | auto]` — Đổi não bộ AI\n"
+                "• `/help`, `/reset`, `/memo`"
             )
             send_message(chat_id, welcome, reply_to_message_id=message_id)
             return
@@ -508,24 +644,56 @@ def handle_update(update):
         if text == "/help":
             help_text = (
                 "📖 **DANH SÁCH LỆNH VÀ HƯỚNG DẪN TIẾNG VIỆT**\n\n"
-                "1. 🚀 **/start** — Khởi động và xem thông tin bot.\n"
-                "2. 🔄 **/reset** — Làm mới cuộc trò chuyện, xóa ngữ cảnh cũ.\n"
-                "3. 🧠 **/memo** — Xem các thông tin cá nhân/sở thích bot đang nhớ về anh.\n"
-                "4. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi model AI:\n"
-                "   • `auto`: Tự động nhận diện câu hỏi để chọn model phù hợp nhất.\n"
-                "   • `sol`: GPT-5.6 Sol (Mạnh nhất, suy luận logic sâu).\n"
-                "   • `code`: GPT-5.3 Codex (Chuyên lập trình, sửa bug code).\n"
-                "   • `claude`: Claude Sonnet 4.6 (Văn phong cao cấp, viết lách).\n"
-                "   • `terra`: GPT-5.6 Terra (Phản hồi 1 giây, siêu tiết kiệm).\n\n"
-                "✨ **CÁC TÍNH NĂNG TỰ ĐỘNG KHÔNG CẦN LỆNH:**\n"
-                "• 🌤️ **Thời tiết:** Nhắn *'Thời tiết Ninh Bình hôm nay'*, *'Dự báo 2/9 có mưa không?'*.\n"
-                "• 🥩 **Hỏi giá cả, quán ăn, sự kiện:** Nhắn bất kỳ câu hỏi nào về ẩm thực, giá cả, nhà hàng.\n"
-                "• 👁️ **Gửi ảnh:** Bot tự động nhìn ảnh và phân tích.\n"
-                "• 📄 **Gửi file/link:** Bot tự động đọc và tóm tắt.\n"
-                "• ⏰ **Hẹn giờ:** Nhắn *'Nhắc anh sau 10 phút...'* hoặc *'Nhắc tôi lúc 08:00...'*.\n"
-                "• 🧠 **Ghi nhớ:** Nhắn *'Hãy nhớ rằng tôi thích...'* để bot lưu vào bộ nhớ."
+                "1. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối:\n"
+                "   • `/daily on` : Bật gửi bản tin tự động (Sáng 07:00 & Tối 20:00).\n"
+                "   • `/daily now` : Gửi ngay 1 bản tin mẫu tức thì.\n"
+                "   • `/daily off` : Tắt nhận bản tin.\n"
+                "   • `/daily time 06:30 21:00` : Đổi giờ gửi sáng và tối.\n"
+                "2. 🚀 **/start** — Khởi động và xem thông tin bot.\n"
+                "3. 🔄 **/reset** — Làm mới cuộc trò chuyện, xóa ngữ cảnh cũ.\n"
+                "4. 🧠 **/memo** — Xem các thông tin cá nhân/sở thích bot đang nhớ.\n"
+                "5. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi model AI."
             )
             send_message(chat_id, help_text, reply_to_message_id=message_id)
+            return
+
+        # Command: /daily (Quản lý Bản Tin Sáng & Tối)
+        if text.startswith("/daily"):
+            parts = text.split()
+            chat_id_str = str(chat_id)
+            if chat_id_str not in subscriptions:
+                subscriptions[chat_id_str] = {
+                    "enabled": True,
+                    "location": "Ninh Bình",
+                    "morning_time": "07:00",
+                    "evening_time": "20:00",
+                    "last_morning_date": "",
+                    "last_evening_date": ""
+                }
+                
+            if len(parts) > 1:
+                action = parts[1].lower()
+                if action in ["on", "enable", "bat", "bật"]:
+                    subscriptions[chat_id_str]["enabled"] = True
+                    save_subscriptions(subscriptions)
+                    send_message(chat_id, "✅ **Đã BẬT lịch gửi Bản Tin Tổng Hợp Hàng Ngày!**\n\n🕒 **Lịch trình cố định:**\n• 🌅 **Bản tin sáng:** 07:00 sáng\n• 🌆 **Bản tin tối:** 20:00 tối\n\nEm sẽ tự động gửi đúng giờ mỗi ngày cho anh nhé!", reply_to_message_id=message_id)
+                elif action in ["off", "disable", "tat", "tắt"]:
+                    subscriptions[chat_id_str]["enabled"] = False
+                    save_subscriptions(subscriptions)
+                    send_message(chat_id, "⏸️ Đã tắt nhận bản tin tự động hàng ngày.", reply_to_message_id=message_id)
+                elif action in ["now", "test", "mau", "mẫu"]:
+                    send_message(chat_id, "⏳ Đang tổng hợp dữ liệu thời tiết & tin tức để tạo bản tin cho anh...")
+                    briefing = generate_briefing("morning", subscriptions[chat_id_str].get("location", "Ninh Bình"), chat_id=chat_id)
+                    send_message(chat_id, briefing, reply_to_message_id=message_id)
+                elif action in ["time", "gio", "giờ"] and len(parts) >= 4:
+                    subscriptions[chat_id_str]["morning_time"] = parts[2]
+                    subscriptions[chat_id_str]["evening_time"] = parts[3]
+                    save_subscriptions(subscriptions)
+                    send_message(chat_id, f"✅ Đã cập nhật giờ gửi bản tin: Sáng **{parts[2]}** & Tối **{parts[3]}**!", reply_to_message_id=message_id)
+            else:
+                cfg = subscriptions[chat_id_str]
+                st = "ĐANG BẬT" if cfg.get("enabled", True) else "ĐÃ TẮT"
+                send_message(chat_id, f"📰 **TRẠNG THÁI BẢN TIN TỔNG HỢP:**\n• Trạng thái: **{st}**\n• Giờ gửi sáng: **{cfg.get('morning_time', '07:00')}**\n• Giờ gửi tối: **{cfg.get('evening_time', '20:00')}**\n• Khu vực: **{cfg.get('location', 'Ninh Bình')}**\n\n👉 Gõ `/daily on` để bật, `/daily now` để xem thử ngay!", reply_to_message_id=message_id)
             return
 
         # Command: /model
@@ -534,24 +702,24 @@ def handle_update(update):
             if len(parts) > 1:
                 m_arg = parts[1].lower()
                 if m_arg in ["auto", "default"]:
-                    user_model_override.pop(chat_id, None)
+                    user_model_override.pop(str(chat_id), None)
                     send_message(chat_id, "✅ Đã bật chế độ **Tự Động Định Tuyến Model Thông Minh (Smart Router)**!", reply_to_message_id=message_id)
                 elif m_arg in ["sol", "gpt-5.6-sol"]:
-                    user_model_override[chat_id] = "gpt-5.6-sol"
+                    user_model_override[str(chat_id)] = "gpt-5.6-sol"
                     send_message(chat_id, "✅ Đã cố định Model: **GPT-5.6 Sol** (Siêu suy luận)!", reply_to_message_id=message_id)
                 elif m_arg in ["code", "codex", "gpt-5.3-codex-spark"]:
-                    user_model_override[chat_id] = "gpt-5.3-codex-spark"
+                    user_model_override[str(chat_id)] = "gpt-5.3-codex-spark"
                     send_message(chat_id, "✅ Đã cố định Model: **GPT-5.3 Codex Spark** (Chuyên lập trình)!", reply_to_message_id=message_id)
                 elif m_arg in ["claude", "sonnet", "claude-sonnet-4-6"]:
-                    user_model_override[chat_id] = "claude-sonnet-4-6"
+                    user_model_override[str(chat_id)] = "claude-sonnet-4-6"
                     send_message(chat_id, "✅ Đã cố định Model: **Claude Sonnet 4.6**!", reply_to_message_id=message_id)
                 elif m_arg in ["terra", "gpt-5.6-terra"]:
-                    user_model_override[chat_id] = "gpt-5.6-terra"
+                    user_model_override[str(chat_id)] = "gpt-5.6-terra"
                     send_message(chat_id, "✅ Đã cố định Model: **GPT-5.6 Terra** (Siêu tốc & Tiết kiệm)!", reply_to_message_id=message_id)
                 else:
                     send_message(chat_id, "⚠️ Cú pháp: `/model [auto | sol | code | claude | terra]`", reply_to_message_id=message_id)
             else:
-                current = user_model_override.get(chat_id, "Tự động (Smart Router)")
+                current = user_model_override.get(str(chat_id), "Tự động (Smart Router)")
                 send_message(chat_id, f"ℹ️ Model hiện tại của anh: **{current}**\nĐổi model bằng cách gõ: `/model [auto | sol | code | claude | terra]`", reply_to_message_id=message_id)
             return
 
@@ -623,6 +791,29 @@ def handle_update(update):
         if not text:
             return
 
+        # Natural Language Daily Briefing Activation Intent
+        if any(phrase in text.lower() for phrase in ["tin tổng hợp", "bản tin sáng", "bản tin tối", "gửi tin sáng", "tổng hợp tin"]):
+            chat_id_str = str(chat_id)
+            if chat_id_str not in subscriptions:
+                subscriptions[chat_id_str] = {}
+            subscriptions[chat_id_str]["enabled"] = True
+            subscriptions[chat_id_str]["location"] = "Ninh Bình"
+            subscriptions[chat_id_str]["morning_time"] = "07:00"
+            subscriptions[chat_id_str]["evening_time"] = "20:00"
+            save_subscriptions(subscriptions)
+            
+            send_message(
+                chat_id,
+                "✅ **ĐÃ KÍCH HOẠT LỊCH GỬI BẢN TIN TỰ ĐỘNG 24/7!**\n\n"
+                "Em đã lưu cấu hình cố định vào hệ thống máy chủ, không bao giờ bị quên nữa:\n"
+                "• 🌅 **Bản tin sáng:** Tự động gửi lúc **07:00 sáng** (Dự báo thời tiết Ninh Bình, điểm tin nhanh, mẹo ngày mới).\n"
+                "• 🌆 **Bản tin tối:** Tự động gửi lúc **20:00 tối** (Tổng kết ngày, thời tiết ngày mai, lời chúc thư giãn).\n\n"
+                "👉 Anh có thể gõ `/daily now` bất kỳ lúc nào để xem ngay bản tin mẫu nhé!",
+                reply_to_message_id=message_id
+            )
+            set_message_reaction(chat_id, message_id, "👍")
+            return
+
         # Memory intent
         mem_match = re.search(r'^(?:hãy\s+)?nhớ\s+(?:rằng|là|cho\s+tôi|giúp\s+tôi)?\s*(.+)', text, re.IGNORECASE)
         if mem_match and not any(kw in text.lower() for kw in ["sau", "lúc", "giờ", "phút"]):
@@ -692,7 +883,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Live Weather & Grounding...")
+    logger.info("Starting Cloud Long Polling Loop with Persistent Daily Briefings...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
@@ -723,9 +914,9 @@ def cloud_polling_loop():
             logger.error(f"Polling exception: {e}")
             time.sleep(5)
 
-# 1. Reminder scheduler thread
-reminder_thread = threading.Thread(target=reminder_scheduler_loop, daemon=True)
-reminder_thread.start()
+# 1. Unified scheduler thread (Daily Briefings + Reminders)
+scheduler_thread = threading.Thread(target=reminder_scheduler_loop, daemon=True)
+scheduler_thread.start()
 
 # 2. Anti-Sleep Keep-Alive thread
 keep_alive_thread = threading.Thread(target=anti_sleep_keep_alive, daemon=True)
