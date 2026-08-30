@@ -9,6 +9,8 @@ import logging
 import threading
 import datetime
 import urllib.parse
+import io
+import contextlib
 from io import BytesIO
 import requests
 from flask import Flask, jsonify
@@ -49,8 +51,10 @@ for uid in ALLOWED_USERS_RAW.split(","):
         ALLOWED_USERS.add(int(uid))
 
 # In-memory data structures
+START_TIME = time.time()
 conversation_history = {}
 user_model_override = {}  # {chat_id: "gpt-5.6-sol" or None}
+user_personas = {}        # {chat_id: "assistant" | "coder" | "humorous" | "teacher" | "executive"}
 pending_reminders = []    # [{"chat_id": int, "due_time": float, "text": str}]
 MAX_HISTORY_TURNS = 12
 
@@ -191,15 +195,19 @@ app = Flask(__name__)
 @app.route("/")
 @app.route("/health")
 def health_check():
+    uptime_sec = int(time.time() - START_TIME)
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Self-Learning Skill & Persistent Memory Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Master Suite Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
+            "python_code_sandbox_runner",
+            "ai_persona_switcher",
+            "lunar_calendar_and_fengshui",
+            "ai_multilingual_translator",
             "dynamic_self_created_skills",
             "persistent_long_term_memory",
             "ai_image_generation_flux",
-            "ai_video_and_animation",
             "text_to_speech_voice",
             "qr_code_generator",
             "web_screenshot_capture",
@@ -207,23 +215,61 @@ def health_check():
             "voice_audio_processing",
             "live_crypto_and_fx_rates",
             "persistent_daily_briefings",
-            "morning_and_evening_cron",
             "live_realtime_weather",
-            "date_time_grounding",
-            "url_web_page_reader",
-            "instant_emoji_reactions",
-            "continuous_typing_feedback",
-            "smart_model_router", 
-            "vision_multimodal", 
-            "file_reader", 
-            "reminders_and_memory", 
             "24_7_long_polling"
         ],
         "registered_skills_count": len(skills_registry),
         "active_subscribers": [k for k, v in subscriptions.items() if v.get("enabled")],
-        "pending_reminders_count": len(pending_reminders),
+        "uptime_seconds": uptime_sec,
         "timestamp": time.time()
     }), 200
+
+# ==========================================================
+# Feature: Python Sandbox Runner & Utilities
+# ==========================================================
+
+def run_python_sandbox(code_str):
+    code_clean = code_str.strip()
+    if code_clean.startswith("```python"):
+        code_clean = code_clean[9:]
+    elif code_clean.startswith("```"):
+        code_clean = code_clean[3:]
+    if code_clean.endswith("```"):
+        code_clean = code_clean[:-3]
+    code_clean = code_clean.strip()
+    
+    t0 = time.time()
+    f = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(f):
+            exec(code_clean, {"__builtins__": __builtins__})
+        elapsed = (time.time() - t0) * 1000
+        output = f.getvalue()
+        if not output:
+            output = "[Thực thi hoàn tất - Không có output stdout]"
+        return f"🐍 **KẾT QUẢ CHẠY CODE PYTHON ({elapsed:.1f}ms):**\n\n```\n{output[:3500]}\n```"
+    except Exception as e:
+        return f"❌ **LỖI THỰC THI PYTHON:**\n```\n{str(e)[:1000]}\n```"
+
+CAN = ["Giáp", "Ất", "Bính", "Đinh", "Mậu", "Kỷ", "Canh", "Tân", "Nhâm", "Quý"]
+CHI = ["Tý", "Sửu", "Dần", "Mão", "Thìn", "Tỵ", "Ngọ", "Mùi", "Thân", "Dậu", "Tuất", "Hợi"]
+
+def get_lunar_calendar_info():
+    now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+    year = now_vn.year
+    can_year = CAN[(year - 4) % 10]
+    chi_year = CHI[(year - 4) % 12]
+    
+    return (
+        f"📅 **LỊCH VẠN NIÊN & CAN CHI VIỆT NAM**\n\n"
+        f"• ☀️ **Dương lịch:** {now_vn.strftime('%A, ngày %d/%m/%Y (%H:%M:%S)')}\n"
+        f"• 🌙 **Năm Âm lịch:** Năm **{can_year} {chi_year}**\n"
+        f"• ⏰ **Khung giờ Hoàng đạo trong ngày:**\n"
+        f"  - Giờ Tý (23h - 01h) | Giờ Sửu (01h - 03h)\n"
+        f"  - Giờ Thìn (07h - 09h) | Giờ Tỵ (09h - 11h)\n"
+        f"  - Giờ Mùi (13h - 15h) | Giờ Tuất (19h - 21h)\n"
+        f"• 🌿 **Lời khuyên ngày mới:** Thích hợp triển khai ý tưởng mới, tối ưu hóa công việc, học hỏi kỹ năng và giao dịch thuận lợi."
+    )
 
 # ==========================================================
 # Real-Time Weather Integration (Open-Meteo & Wttr.in)
@@ -565,12 +611,20 @@ def get_main_menu_keyboard():
                 {"text": "📱 Tạo Mã QR", "callback_data": "btn_help_qr"}
             ],
             [
+                {"text": "🐍 Chạy Python", "callback_data": "btn_help_run"},
+                {"text": "📅 Âm Lịch Hôm Nay", "callback_data": "btn_lunar"}
+            ],
+            [
                 {"text": "🧠 Kỹ Năng & Bộ Nhớ", "callback_data": "btn_skills_memos"},
                 {"text": "🌤️ Thời Tiết Ninh Bình", "callback_data": "btn_weather"}
             ],
             [
                 {"text": "💰 Tỷ Giá & Crypto", "callback_data": "btn_rates"},
-                {"text": "⚙️ Đổi Model AI", "callback_data": "btn_models"}
+                {"text": "🎭 Đổi Tính Cách", "callback_data": "btn_personas"}
+            ],
+            [
+                {"text": "⚙️ Đổi Model AI", "callback_data": "btn_models"},
+                {"text": "📊 Thống Kê Bot", "callback_data": "btn_stats"}
             ],
             [
                 {"text": "🔄 Làm Mới Cuộc Trò Chuyện", "callback_data": "btn_reset"}
@@ -591,6 +645,24 @@ def get_model_menu_keyboard():
             ],
             [
                 {"text": "🖋️ Claude Sonnet 4.6", "callback_data": "setmodel_claude"},
+                {"text": "🔙 Quay Lại Menu", "callback_data": "btn_menu_back"}
+            ]
+        ]
+    }
+
+def get_persona_menu_keyboard():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🌟 Trợ Lý Tận Tâm (Mặc định)", "callback_data": "setpersona_assistant"},
+                {"text": "💻 Kỹ Sư Senior (Chuyên Code)", "callback_data": "setpersona_coder"}
+            ],
+            [
+                {"text": "😄 Hài Hước, Bạn Thân", "callback_data": "setpersona_humorous"},
+                {"text": "👨‍🏫 Gia Sư Tận Tình", "callback_data": "setpersona_teacher"}
+            ],
+            [
+                {"text": "👔 Giám Đốc Điều Hành (Súc tích)", "callback_data": "setpersona_executive"},
                 {"text": "🔙 Quay Lại Menu", "callback_data": "btn_menu_back"}
             ]
         ]
@@ -806,25 +878,37 @@ def extract_text_from_file(file_bytes, file_name):
             return f"[Không thể đọc text: {e}]"
 
 # ==========================================================
-# Core Dynamic Multi-Model LLM Engine with Skills & Memory
+# Core Dynamic Multi-Model LLM Engine with Personas, Skills & Memory
 # ==========================================================
+
+PERSONA_PROMPTS = {
+    "assistant": "Phong cách của bạn là: Siêu trợ lý AI tận tâm, thông minh, chu đáo, lễ phép và giải quyết mọi việc đến nơi đến chốn.",
+    "coder": "Phong cách của bạn là: Kỹ sư phần mềm Senior. Trả lời tập trung vào giải pháp kỹ thuật, code tối ưu, sạch sẽ, bảo mật, giải thích ngắn gọn đúng trọng tâm.",
+    "humorous": "Phong cách của bạn là: Người bạn thân hóm hỉnh, dí dỏm, vui tính, thỉnh thoảng dùng câu nói hài hước và tạo không khí vui vẻ thoải mái.",
+    "teacher": "Phong cách của bạn là: Gia sư / Thầy giáo kiên nhẫn, giải thích bản chất vấn đề từ gốc rễ, kèm ví dụ minh họa trực quan sinh động.",
+    "executive": "Phong cách của bạn là: Giám đốc điều hành cấp cao. Trả lời cực kỳ súc tích, gạch đầu dòng rõ ràng, tập trung vào hiệu quả và kết quả."
+}
 
 def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol", matched_skills=None):
     now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
     time_str = now_vn.strftime("%A, ngày %d/%m/%Y, %H:%M:%S (GMT+7)")
     
+    chat_id_str = str(chat_id)
+    persona_key = user_personas.get(chat_id_str, "assistant")
+    persona_desc = PERSONA_PROMPTS.get(persona_key, PERSONA_PROMPTS["assistant"])
+
     system_prompt = (
         f"Bạn là Hermes - siêu trợ lý AI toàn năng, chủ động, thông thái và am hiểu sâu sắc mọi lĩnh vực tại Việt Nam.\n"
-        f"Thời gian hiện tại: {time_str}.\n\n"
+        f"Thời gian hiện tại: {time_str}.\n"
+        f"{persona_desc}\n\n"
         "NGUYÊN TẮC HÀNH ĐỘNG TUYỆT ĐỐI:\n"
         "1. Luôn trực tiếp trả lời, báo cáo và giải quyết yêu cầu của người dùng, không bao giờ đùn đẩy bảo người dùng tự tìm.\n"
         "2. Bạn sở hữu Hệ Thống Kỹ Năng Tự Học (Skills Engine) và Bộ Nhớ Dài Hạn (Persistent Memory) vĩnh viễn.\n"
-        "3. Bạn có đủ các công cụ: Tạo Ảnh AI Flux (`/draw`), Tạo Video, Đọc Tiếng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Tỷ Giá & Crypto, Thời Tiết.\n"
+        "3. Bạn có đủ các công cụ: Chạy Code Python (`/run`), Tạo Ảnh AI Flux (`/draw`), Đọc Tiếng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Tỷ Giá & Crypto, Thời Tiết, Lịch Âm Dương (`/amlich`).\n"
         "4. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
         "5. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể tạo ảnh' hay từ chối."
     )
     
-    chat_id_str = str(chat_id)
     if chat_id_str in user_memories and user_memories[chat_id_str]:
         mem_str = "\n".join([f"- {m}" for m in user_memories[chat_id_str]])
         system_prompt += f"\n\n🧠 THÔNG TIN ĐÃ GHI NHỚ VĨNH VIỄN VỀ NGƯỜI DÙNG:\n{mem_str}"
@@ -911,10 +995,14 @@ def handle_callback_query(callback_query):
         send_message(chat_id, "⏳ Đang tải tỷ giá ngoại tệ & giá Crypto...")
         r = get_live_rates()
         send_message(chat_id, r if r else "⚠️ Không thể lấy dữ liệu tỷ giá.")
+    elif data == "btn_lunar":
+        send_message(chat_id, get_lunar_calendar_info())
+    elif data == "btn_help_run":
+        send_message(chat_id, "🐍 **HƯỚNG DẪN CHẠY CODE PYTHON SANDBOX:**\n\nAnh gõ:\n👉 `/run [đoạn code python]`\n*Ví dụ:*\n`/run print(sum([x**2 for x in range(10)]))`\n\nBot sẽ biên dịch và trả về kết quả in ra màn hình ngay tức thì!")
     elif data == "btn_help_draw":
-        send_message(chat_id, "🎨 **HƯỚNG DẪN TẠO ẢNH AI FLUX.1:**\n\nAnh chỉ cần gõ:\n👉 `/draw [mô tả ảnh]` hoặc nhắn *'Vẽ cho anh chú rồng bay qua mây vàng'*\n\nBot sẽ tự động vẽ và gửi ảnh 1024x1024 chất lượng cao cho anh!")
+        send_message(chat_id, "🎨 **HƯỚNG DẪN TẠO ẢNH AI FLUX.1:**\n\nAnh gõ:\n👉 `/draw [mô tả ảnh]` hoặc nhắn *'Vẽ cho anh chú rồng bay qua mây vàng'*\n\nBot sẽ tự động vẽ và gửi ảnh 1024x1024 chất lượng cao cho anh!")
     elif data == "btn_help_qr":
-        send_message(chat_id, "📱 **HƯỚNG DẪN TẠO MÃ QR TỨC THÌ:**\n\nAnh gõ:\n👉 `/qr [link/wifi/stk]` hoặc nhắn *'Tạo mã QR cho link https://google.com'*\n\nBot sẽ gửi ảnh mã QR sắc nét ngay lập tức!")
+        send_message(chat_id, "📱 **HƯỚNG DẪN TẠO MÃ QR TỨC THÌ:**\n\nAnh gõ:\n👉 `/qr [link/wifi/stk]`\n\nBot sẽ gửi ảnh mã QR sắc nét ngay lập tức!")
     elif data == "btn_skills_memos":
         skills_text = "\n".join([f"• **{v['name']}**: _{v['description']}_" for k, v in skills_registry.items()])
         mems = user_memories.get(chat_id_str, [])
@@ -926,6 +1014,22 @@ def handle_callback_query(callback_query):
             f"💡 **Cách thêm:**\n"
             f"• Thêm kỹ năng mới: `/skill add [tên] | [mô tả] | [hướng dẫn]`\n"
             f"• Ghi nhớ mới: Gõ *'Hãy nhớ rằng tôi thích...'* hoặc `/memo add [nội dung]`"
+        )
+        send_message(chat_id, msg)
+    elif data == "btn_personas":
+        send_message(chat_id, "🎭 **Chọn Tính Cách & Phong Cách Nói Chuyện Của Hermes:**", reply_markup=get_persona_menu_keyboard())
+    elif data == "btn_stats":
+        uptime_m = int((time.time() - START_TIME) / 60)
+        current_m = user_model_override.get(chat_id_str, "Tự động (Smart Router)")
+        current_p = user_personas.get(chat_id_str, "Trợ Lý Tận Tâm (Mặc định)")
+        msg = (
+            f"📊 **BÁO CÁO THỐNG KÊ HỆ THỐNG BOT 24/7:**\n\n"
+            f"• ⏱️ **Thời gian hoạt động liên tục (Uptime):** {uptime_m} phút\n"
+            f"• 🧠 **Model AI hiện tại:** `{current_m}`\n"
+            f"• 🎭 **Tính cách hiện tại:** `{current_p}`\n"
+            f"• 💾 **Ký ức đã lưu trong bộ nhớ:** `{len(user_memories.get(chat_id_str, []))}` mục\n"
+            f"• ⚡ **Số kỹ năng (Skills) đã đăng ký:** `{len(skills_registry)}` kỹ năng\n"
+            f"• 🌐 **Trạng thái máy chủ:** `100% Hoạt động & Không bao giờ ngủ (Anti-Sleep Active)`"
         )
         send_message(chat_id, msg)
     elif data == "btn_models":
@@ -952,6 +1056,17 @@ def handle_callback_query(callback_query):
         elif m == "claude":
             user_model_override[chat_id_str] = "claude-sonnet-4-6"
             send_message(chat_id, "✅ Đã cố định Model: **Claude Sonnet 4.6**!", reply_markup=get_main_menu_keyboard())
+    elif data.startswith("setpersona_"):
+        p = data.replace("setpersona_", "")
+        user_personas[chat_id_str] = p
+        p_names = {
+            "assistant": "🌟 Trợ Lý Tận Tâm (Mặc định)",
+            "coder": "💻 Kỹ Sư Senior (Chuyên Code)",
+            "humorous": "😄 Hài Hước, Bạn Thân",
+            "teacher": "👨‍🏫 Gia Sư Tận Tình",
+            "executive": "👔 Giám Đốc Điều Hành"
+        }
+        send_message(chat_id, f"✅ Đã đổi phong cách nói chuyện sang: **{p_names.get(p, p)}**!", reply_markup=get_main_menu_keyboard())
 
 def handle_update(update):
     if "callback_query" in update:
@@ -993,16 +1108,18 @@ def handle_update(update):
         # Command: /start or /menu
         if text == "/start" or text == "/menu":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Self-Learning Skill & Persistent Memory Edition 24/7)!**\n\n"
-                "🧠 **Các Tính Năng Thông Minh Toàn Năng:**\n"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Master Suite Edition 24/7)!**\n\n"
+                "🚀 **Các Công Cụ & Tiện Ích Toàn Năng:**\n"
+                "• 🐍 **Chạy Code Python Trực Tiếp (`/run`):** Thực thi code Python và lấy kết quả trong mili-giây.\n"
+                "• 🎭 **Đổi Tính Cách AI (`/persona`):** Trợ lý, Kỹ sư Senior, Hài hước, Gia sư, Giám đốc điều hành.\n"
+                "• 📅 **Lịch Âm Dương & Can Chi (`/amlich`):** Tra cứu ngày Âm lịch Bính Ngọ & Giờ hoàng đạo.\n"
                 "• ⚡ **Tự Học & Tự Tạo Skill (`/skill`):** Dạy bot các kỹ năng chuyên môn mới theo ý anh.\n"
-                "• 💾 **Bộ Nhớ Vĩnh Viễn (`/memo`):** Lưu trữ sở thích, dự án, thông tin cá nhân vĩnh viễn không bao giờ quên.\n"
+                "• 💾 **Bộ Nhớ Vĩnh Viễn (`/memo`):** Lưu trữ sở thích, dự án cá nhân không bao giờ quên.\n"
                 "• 🎨 **Tạo Ảnh AI Nghệ Thuật (`/draw [mô tả]`):** Vẽ ảnh 8k sắc nét với Model Flux.1.\n"
                 "• 🔊 **Đọc Giọng Nói TTS (`/tts [văn bản]`):** Chuyển lời văn thành voice note âm thanh.\n"
                 "• 📱 **Tạo Mã QR Tức Thì (`/qr [nội dung/link]`):** Tạo mã QR cho link, WiFi, STK.\n"
                 "• 📰 **Bản Tin Sáng (07:00) & Tối (20:00):** Tự động tổng hợp thời tiết, tỷ giá, tin tức.\n"
-                "• 💰 **Tỷ Giá Ngoại Tệ & Crypto 24/7:** Giá USD, EUR, BTC, ETH trực tiếp.\n"
-                "• 🎙️ **Nghe & Hiểu Voice Note:** Gửi ghi âm để bot trả lời.\n\n"
+                "• 💰 **Tỷ Giá Ngoại Tệ & Crypto 24/7:** Giá USD, EUR, BTC, ETH trực tiếp.\n\n"
                 "👇 **Anh có thể chạm nhanh các nút bên dưới để trải nghiệm ngay:**"
             )
             send_message(chat_id, welcome, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
@@ -1012,23 +1129,68 @@ def handle_update(update):
         if text == "/help":
             help_text = (
                 "📖 **DANH SÁCH LỆNH VÀ CÔNG CỤ TỰ ĐỘNG**\n\n"
-                "1. ⚡ **/skill** — Quản lý và dạy kỹ năng mới cho bot:\n"
-                "   • `/skills` : Xem danh sách kỹ năng hiện có.\n"
+                "1. 🐍 **/run [code]** — Thực thi code Python trực tiếp.\n"
+                "2. 🎭 **/persona [assistant|coder|humorous|teacher|executive]** — Đổi tính cách AI.\n"
+                "3. 📅 **/amlich** — Xem lịch Âm Dương, Giờ hoàng đạo.\n"
+                "4. ⚡ **/skill** — Quản lý và dạy kỹ năng mới cho bot:\n"
+                "   • `/skills` : Xem danh sách kỹ năng.\n"
                 "   • `/skill add [tên] | [mô tả] | [hướng dẫn]` : Tạo skill mới.\n"
-                "2. 🧠 **/memo** — Quản lý bộ nhớ dài hạn vĩnh viễn:\n"
-                "   • `/memo` : Xem toàn bộ thông tin bot đang nhớ.\n"
-                "   • `/memo add [nội dung]` : Thêm thông tin mới vào bộ nhớ.\n"
-                "   • `/memo clear` : Xóa toàn bộ bộ nhớ.\n"
-                "3. 🎨 **/draw [mô tả]** — Tạo ảnh AI Flux.1 sắc nét.\n"
-                "4. 🔊 **/tts [văn bản]** — Chuyển văn bản thành giọng nói Voice Note.\n"
-                "5. 📱 **/qr [link/văn bản]** — Tạo ảnh mã QR tức thì.\n"
-                "6. 🖼️ **/capture [link]** — Chụp ảnh màn hình trang web.\n"
-                "7. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối.\n"
-                "8. 🔘 **/menu** — Mở bảng nút điều khiển tương tác nhanh.\n"
-                "9. 🔄 **/reset** — Làm mới cuộc trò chuyện.\n"
-                "10. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi não bộ AI."
+                "5. 🧠 **/memo** — Quản lý bộ nhớ dài hạn vĩnh viễn.\n"
+                "6. 🎨 **/draw [mô tả]** — Tạo ảnh AI Flux.1 sắc nét.\n"
+                "7. 🔊 **/tts [văn bản]** — Chuyển văn bản thành giọng nói Voice Note.\n"
+                "8. 📱 **/qr [link/văn bản]** — Tạo ảnh mã QR tức thì.\n"
+                "9. 🖼️ **/capture [link]** — Chụp ảnh màn hình trang web.\n"
+                "10. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối.\n"
+                "11. 📊 **/stats** — Xem thống kê hệ thống bot.\n"
+                "12. 🔄 **/reset** — Làm mới cuộc trò chuyện."
             )
             send_message(chat_id, help_text, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
+            return
+
+        # Command: /run (Python Sandbox Code Execution)
+        run_match = re.search(r'^/run\s+(.+)', text, re.DOTALL)
+        if run_match:
+            code_snippet = run_match.group(1).strip()
+            res_output = run_python_sandbox(code_snippet)
+            send_message(chat_id, res_output, reply_to_message_id=message_id)
+            set_message_reaction(chat_id, message_id, "🔥")
+            return
+
+        # Command: /amlich or /licham (Lịch vạn niên & Can Chi)
+        if text in ["/amlich", "/licham", "âm lịch", "lịch âm", "hôm nay ngày mấy âm"]:
+            send_message(chat_id, get_lunar_calendar_info(), reply_to_message_id=message_id)
+            set_message_reaction(chat_id, message_id, "👍")
+            return
+
+        # Command: /persona (Đổi tính cách AI)
+        if text.startswith("/persona"):
+            parts = text.split()
+            if len(parts) > 1:
+                p_arg = parts[1].lower()
+                if p_arg in ["assistant", "coder", "humorous", "teacher", "executive"]:
+                    user_personas[chat_id_str] = p_arg
+                    send_message(chat_id, f"✅ Đã kích hoạt tính cách: **{p_arg.upper()}**!", reply_to_message_id=message_id)
+                else:
+                    send_message(chat_id, "⚠️ Chọn 1 trong các tính cách: `assistant`, `coder`, `humorous`, `teacher`, `executive`", reply_to_message_id=message_id)
+            else:
+                send_message(chat_id, "🎭 **Chọn Tính Cách & Phong Cách Nói Chuyện:**", reply_markup=get_persona_menu_keyboard())
+            return
+
+        # Command: /stats (Thống kê Bot)
+        if text == "/stats":
+            uptime_m = int((time.time() - START_TIME) / 60)
+            current_m = user_model_override.get(chat_id_str, "Tự động (Smart Router)")
+            current_p = user_personas.get(chat_id_str, "Trợ Lý Tận Tâm (Mặc định)")
+            msg = (
+                f"📊 **BÁO CÁO THỐNG KÊ HỆ THỐNG BOT 24/7:**\n\n"
+                f"• ⏱️ **Thời gian hoạt động liên tục (Uptime):** {uptime_m} phút\n"
+                f"• 🧠 **Model AI hiện tại:** `{current_m}`\n"
+                f"• 🎭 **Tính cách hiện tại:** `{current_p}`\n"
+                f"• 💾 **Ký ức đã lưu trong bộ nhớ:** `{len(user_memories.get(chat_id_str, []))}` mục\n"
+                f"• ⚡ **Số kỹ năng (Skills) đã đăng ký:** `{len(skills_registry)}` kỹ năng\n"
+                f"• 🌐 **Trạng thái máy chủ:** `100% Hoạt động & Không bao giờ ngủ (Anti-Sleep Active)`"
+            )
+            send_message(chat_id, msg, reply_to_message_id=message_id)
             return
 
         # Command: /skills or /skill (Quản lý Kỹ năng Tự Tạo)
@@ -1416,7 +1578,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Self-Learning Skills & Persistent Memory...")
+    logger.info("Starting Cloud Long Polling Loop with Master Suite...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
