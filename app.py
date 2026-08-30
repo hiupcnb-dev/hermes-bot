@@ -46,6 +46,7 @@ SUBSCRIPTIONS_FILE = "scheduled_subscriptions.json"
 MEMORIES_FILE = "user_memories.json"
 SKILLS_FILE = "skills_registry.json"
 TODOS_FILE = "user_todos.json"
+EXPENSES_FILE = "user_expenses.json"
 
 ALLOWED_USERS = set()
 for uid in ALLOWED_USERS_RAW.split(","):
@@ -59,7 +60,6 @@ conversation_history = {}
 user_model_override = {}  # {chat_id: "gpt-5.6-sol" or None}
 user_personas = {}        # {chat_id: "assistant" | "coder" | "humorous" | "teacher" | "executive"}
 pending_reminders = []    # [{"chat_id": int, "due_time": float, "text": str}]
-active_quizzes = {}       # {chat_id: {"answer": "A", "explanation": "..."}}
 MAX_HISTORY_TURNS = 12
 
 # City coordinates database for instant live weather lookup
@@ -83,7 +83,7 @@ CITY_COORDS = {
 }
 
 # ==========================================================
-# Persistent Subscriptions, Memories, Skills & Todos
+# Persistent Subscriptions, Memories, Skills, Todos & Expenses
 # ==========================================================
 
 def load_subscriptions():
@@ -152,13 +152,13 @@ DEFAULT_SKILLS = {
         "created_by": "system"
     },
     "copywriting_pro": {
-        "name": "Bậc Thầy Sáng Tạo Nội Dung & Viral Marketing",
-        "description": "Soạn thảo bài viết Facebook, kịch bản TikTok, bài PR sản phẩm triệu view",
-        "instructions": "Viết nội dung theo công thức AIDA hoặc PAS, giật tít thu hút, CTA mạnh mẽ và tối ưu tương tác.",
+        "name": "Bậc Thầy Soạn Thảo Văn Bản & Email",
+        "description": "Soạn thảo email công việc, hợp đồng, đơn từ, văn bản hành chính chỉn chu",
+        "instructions": "Soạn thảo văn bản mạch lạc, văn phong trang trọng, chuẩn mực tiếng Việt, rõ ràng và thuyết phục.",
         "created_by": "system"
     },
     "english_coach": {
-        "name": "Gia Sư Tiếng Anh Bản Ngữ",
+        "name": "Gia Sư Tiếng Anh Thực Chiến",
         "description": "Luyện giao tiếp, sửa lỗi phát âm/ngữ pháp và dịch thuật nâng cao",
         "instructions": "Giải thích chi tiết các thành ngữ, từ vựng tự nhiên của người bản xứ và gợi ý các mẫu câu thực tế.",
         "created_by": "system"
@@ -211,6 +211,24 @@ def save_todos(todos):
 
 user_todos = load_todos()
 
+def load_expenses():
+    if os.path.exists(EXPENSES_FILE):
+        try:
+            with open(EXPENSES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading expenses: {e}")
+    return {}
+
+def save_expenses(expenses):
+    try:
+        with open(EXPENSES_FILE, "w", encoding="utf-8") as f:
+            json.dump(expenses, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving expenses: {e}")
+
+user_expenses = load_expenses()
+
 # Flask web app for Render Keep-Alive & Health Checks
 app = Flask(__name__)
 
@@ -220,13 +238,14 @@ def health_check():
     uptime_sec = int(time.time() - START_TIME)
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Super-Bot 24/7 (Ultimate Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Practical Productivity Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
-            "live_news_rss_stream",
+            "personal_expense_and_budget_tracker",
+            "live_document_and_link_summarizer",
+            "professional_email_and_text_composer",
             "interactive_todo_manager",
-            "ai_quiz_and_trivia_games",
-            "fast_crypto_shortcuts",
+            "live_news_rss_stream",
             "python_code_sandbox_runner",
             "ai_persona_switcher",
             "lunar_calendar_and_fengshui",
@@ -238,7 +257,6 @@ def health_check():
             "web_screenshot_capture",
             "interactive_inline_buttons",
             "voice_audio_processing",
-            "live_crypto_and_fx_rates",
             "persistent_daily_briefings",
             "live_realtime_weather",
             "24_7_long_polling"
@@ -250,6 +268,93 @@ def health_check():
     }), 200
 
 # ==========================================================
+# Feature: Personal Expense Tracker Engine
+# ==========================================================
+
+def parse_money(money_str):
+    m = money_str.lower().strip()
+    m = m.replace(",", "").replace(".", "").replace("đ", "").replace("vnd", "").replace("vnđ", "").strip()
+    if m.endswith("k") or m.endswith("nghìn") or m.endswith("ngan"):
+        num = re.sub(r'[^\d]', '', m)
+        return int(num) * 1000 if num else 0
+    elif m.endswith("m") or m.endswith("tr") or m.endswith("trieu") or m.endswith("triệu"):
+        num = re.sub(r'[^\d]', '', m)
+        return int(num) * 1000000 if num else 0
+    else:
+        num = re.sub(r'[^\d]', '', m)
+        return int(num) if num else 0
+
+def parse_expense_natural(text):
+    text_clean = text.strip()
+    
+    # 1. Cú pháp lệnh: /chi 50k ăn phở hoặc /thu 2tr tiền lương
+    cmd_match = re.search(r'^/(?:chi|thu)\s+([\d.,]+(?:k|m|tr|nghìn|triệu|vnđ|đ)?)\s+(.+)', text_clean, re.IGNORECASE)
+    if cmd_match:
+        is_income = text_clean.lower().startswith("/thu")
+        amount = parse_money(cmd_match.group(1))
+        note = cmd_match.group(2).strip()
+        return {"type": "income" if is_income else "expense", "amount": amount, "note": note}
+
+    # 2. Cú pháp: "Đổ xăng 70k", "Ăn sáng 35k", "Mua chuột 150k"
+    nat_match1 = re.search(r'^(.+?)\s+(\d+[\.,\d]*(?:k|m|tr|nghìn|triệu|vnđ|đ)?)$', text_clean, re.IGNORECASE)
+    if nat_match1:
+        note = nat_match1.group(1).strip()
+        amt_raw = nat_match1.group(2)
+        amount = parse_money(amt_raw)
+        expense_keywords = ["chi", "tiêu", "mua", "ăn", "uống", "đổ xăng", "xăng", "trả", "nạp", "hết", "tiền", "vé", "sửa", "lương", "thu"]
+        has_kw = any(kw in note.lower() for kw in expense_keywords)
+        has_unit = any(u in amt_raw.lower() for u in ["k", "m", "tr", "nghìn", "triệu", "đ", "vnđ"])
+        if amount > 0 and (has_kw or has_unit):
+            is_income = any(kw in note.lower() for kw in ["lương", "thu", "thưởng", "nhận"])
+            return {"type": "income" if is_income else "expense", "amount": amount, "note": note}
+
+    # 3. Cú pháp: "50k tiền nước mía", "35k ăn bún"
+    nat_match2 = re.search(r'^(\d+[\.,\d]*(?:k|m|tr|nghìn|triệu|vnđ|đ)?)\s+(?:tiền\s+)?(.+)$', text_clean, re.IGNORECASE)
+    if nat_match2:
+        amount = parse_money(nat_match2.group(1))
+        note = nat_match2.group(2).strip()
+        if amount >= 1000 and len(note) > 1:
+            is_income = any(kw in note.lower() for kw in ["lương", "thu", "thưởng", "nhận"])
+            return {"type": "income" if is_income else "expense", "amount": amount, "note": note}
+            
+    return None
+
+def get_expense_report(chat_id_str):
+    records = user_expenses.get(chat_id_str, [])
+    if not records:
+        return "💵 **SỔ THU CHI CÁ NHÂN**\n\nChưa có ghi chép chi tiêu nào!\n👉 Hãy nhắn: *'Ăn sáng 35k'*, *'Đổ xăng 70k'* hoặc `/chi 50k ăn trưa` để bot tự ghi sổ nhé!"
+    
+    now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+    today_str = now_vn.strftime("%Y-%m-%d")
+    month_str = now_vn.strftime("%Y-%m")
+    
+    today_spent = sum(r["amount"] for r in records if r["type"] == "expense" and r.get("date", "").startswith(today_str))
+    today_income = sum(r["amount"] for r in records if r["type"] == "income" and r.get("date", "").startswith(today_str))
+    
+    month_spent = sum(r["amount"] for r in records if r["type"] == "expense" and r.get("date", "").startswith(month_str))
+    month_income = sum(r["amount"] for r in records if r["type"] == "income" and r.get("date", "").startswith(month_str))
+    
+    recent_lines = []
+    for r in records[-6:]:
+        icon = "🟢 +" if r["type"] == "income" else "🔴 -"
+        recent_lines.append(f"• {icon}**{r['amount']:,}đ**: {r['note']} _({r.get('time_str', '')})_")
+        
+    return (
+        f"💵 **BÁO CÁO SỔ THU CHI CÁ NHÂN**\n\n"
+        f"📅 **Hôm nay ({now_vn.strftime('%d/%m/%Y')}):**\n"
+        f"• Đã chi: 🔴 **{today_spent:,} VNĐ**\n"
+        f"• Thu vào: 🟢 **{today_income:,} VNĐ**\n\n"
+        f"📊 **Tổng kết tháng {now_vn.strftime('%m/%Y')}:**\n"
+        f"• Tổng chi tiêu: **{month_spent:,} VNĐ**\n"
+        f"• Tổng thu nhập: **{month_income:,} VNĐ**\n"
+        f"• Chênh lệch: **{(month_income - month_spent):+,} VNĐ**\n\n"
+        f"📝 **Giao dịch gần đây nhất:**\n" + "\n".join(recent_lines) + "\n\n"
+        f"💡 **Cách ghi sổ nhanh:**\n"
+        f"• Nhắn: *'Ăn trưa 40k'*, *'Đổ xăng 80k'*, *'Cafe 35k'*\n"
+        f"• Hoặc: `/chi 50k ăn phở`, `/thu 10tr lương`"
+    )
+
+# ==========================================================
 # Feature: Live News RSS Feeds
 # ==========================================================
 
@@ -257,7 +362,7 @@ def get_live_news(topic="thoisu"):
     rss_urls = {
         "thoisu": ("https://vnexpress.net/rss/thoi-su.rss", "Thời Sự"),
         "congnghe": ("https://vnexpress.net/rss/so-hoa.rss", "Công Nghệ & AI"),
-        "kinhdoanh": ("https://vnexpress.net/rss/kinh-doanh.rss", "Kinh Doanh & Tài Chính"),
+        "kinhdoanh": ("https://vnexpress.net/rss/kinh-doanh.rss", "Kinh Doanh"),
         "thethao": ("https://vnexpress.net/rss/the-thao.rss", "Thể Thao"),
         "thegioi": ("https://vnexpress.net/rss/the-gioi.rss", "Thế Giới")
     }
@@ -281,7 +386,7 @@ def get_live_news(topic="thoisu"):
             
             news_list.append(f"📰 **{title}**\n_{desc_clean}_\n🔗 [Đọc bài viết]({link})")
             
-        return f"🔥 **ĐIỂM TIN NÓNG TRỰC TIẾP [{topic_name.upper()}]:**\n\n" + "\n\n".join(news_list)
+        return f"🔥 **ĐIỂM TIN NÓNG [{topic_name.upper()}]:**\n\n" + "\n\n".join(news_list)
     except Exception as e:
         logger.error(f"Error fetching news: {e}")
         return f"⚠️ Lỗi lấy tin tức: {e}"
@@ -377,65 +482,6 @@ def is_weather_query(text):
     return any(kw in text_lower for kw in keywords)
 
 # ==========================================================
-# Real-Time Financial & Crypto Rates
-# ==========================================================
-
-def get_live_rates():
-    results = []
-    try:
-        r = requests.get('https://open.er-api.com/v6/latest/USD', timeout=5)
-        rates = r.json().get('rates', {})
-        usd_vnd = rates.get('VND', 0)
-        eur_usd = rates.get('EUR', 1)
-        eur_vnd = (usd_vnd / eur_usd) if eur_usd else 0
-        jpy_usd = rates.get('JPY', 1)
-        jpy_vnd = (usd_vnd / jpy_usd) if jpy_usd else 0
-        results.append(
-            f"💵 **TỶ GIÁ NGOẠI TỆ (REAL-TIME):**\n"
-            f"• 1 USD = **{usd_vnd:,.0f} VND**\n"
-            f"• 1 EUR = **{eur_vnd:,.0f} VND**\n"
-            f"• 100 JPY = **{(jpy_vnd*100):,.0f} VND**"
-        )
-    except Exception as e:
-        logger.warning(f"FX error: {e}")
-        
-    try:
-        crypto_lines = []
-        for sym, name in [('BTCUSDT', 'Bitcoin (BTC)'), ('ETHUSDT', 'Ethereum (ETH)'), ('SOLUSDT', 'Solana (SOL)'), ('BNBUSDT', 'Binance Coin (BNB)')]:
-            r = requests.get(f'https://data-api.binance.vision/api/v3/ticker/price?symbol={sym}', timeout=4)
-            p = float(r.json().get('price', 0))
-            crypto_lines.append(f"• {name}: **${p:,.2f}**")
-        results.append("🪙 **THỊ TRƯỜNG TIỀN MÃ HÓA (CRYPTO 24/7):**\n" + "\n".join(crypto_lines))
-    except Exception as e:
-        logger.warning(f"Crypto error: {e}")
-        
-    return "\n\n".join(results)
-
-def get_single_crypto(sym="BTCUSDT", name="Bitcoin"):
-    try:
-        r = requests.get(f'https://data-api.binance.vision/api/v3/ticker/24hr?symbol={sym}', timeout=5)
-        data = r.json()
-        price = float(data.get('lastPrice', 0))
-        change = float(data.get('priceChangePercent', 0))
-        high = float(data.get('highPrice', 0))
-        low = float(data.get('lowPrice', 0))
-        icon = "🟢" if change >= 0 else "🔴"
-        return (
-            f"🪙 **THÔNG TIN GIÁ {name.upper()} (REAL-TIME):**\n\n"
-            f"• Giá hiện tại: **${price:,.2f}**\n"
-            f"• Biến động 24h: {icon} **{change:+.2f}%**\n"
-            f"• Giá cao nhất 24h: **${high:,.2f}**\n"
-            f"• Giá thấp nhất 24h: **${low:,.2f}**"
-        )
-    except Exception as e:
-        return f"⚠️ Lỗi tra cứu giá {name}: {e}"
-
-def is_rates_query(text):
-    keywords = ["tỷ giá", "giá usd", "giá euro", "giá vàng", "giá btc", "giá bitcoin", "giá eth", "giá coin", "crypto", "tiền tệ", "usd vnd"]
-    text_lower = text.lower()
-    return any(kw in text_lower for kw in keywords)
-
-# ==========================================================
 # Feature: Generative AI (Images, Voice, QR, Screenshots)
 # ==========================================================
 
@@ -516,7 +562,6 @@ def generate_briefing(briefing_type="morning", location="Ninh Bình", chat_id=No
     now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
     time_str = now_vn.strftime("%A, ngày %d/%m/%Y")
     weather_info = get_live_weather(location)
-    rates_info = get_live_rates()
     
     mem_info = ""
     chat_id_str = str(chat_id)
@@ -532,14 +577,12 @@ def generate_briefing(briefing_type="morning", location="Ninh Bình", chat_id=No
         prompt = (
             f"Bạn là Hermes - Siêu Trợ Lý AI cao cấp.\n"
             f"Hãy soạn một **BẢN TIN TỔNG HỢP BUỔI SÁNG** ({time_str}) thật chuyên nghiệp, năng lượng và tinh tế cho người dùng tại {location}.\n"
-            f"Dữ liệu thời tiết thực tế:\n{weather_info}\n\n"
-            f"Dữ liệu thị trường tài chính:\n{rates_info}\n{mem_info}\n\n"
+            f"Dữ liệu thời tiết thực tế:\n{weather_info}\n{mem_info}\n\n"
             "Cấu trúc bản tin gồm:\n"
             "1. 🌅 **Lời chào buổi sáng & Ngày tháng**\n"
             "2. 🌤️ **Dự báo Thời Tiết Trong Ngày** (Nhiệt độ, xác suất mưa, lời khuyên trang phục/hoạt động)\n"
-            "3. 💰 **Điểm Nhanh Tài Chính & Thị Trường** (Tỷ giá USD, Giá Bitcoin nổi bật)\n"
-            "4. 📰 **Điểm Tin Nhanh & Xu Hướng Trong Ngày** (Công nghệ AI, đời sống số, mẹo năng suất)\n"
-            "5. 💡 **Lời chúc ngày mới & Câu nói truyền cảm hứng**\n"
+            "3. 📰 **Điểm Tin Nhanh & Xu Hướng Trong Ngày** (Công nghệ AI, đời sống số, mẹo năng suất)\n"
+            "4. 💡 **Lời chúc ngày mới & Câu nói truyền cảm hứng**\n"
             "Trình bày chuẩn Markdown, icon sinh động, bố cục thoáng đẹp mắt trên Telegram."
         )
     else:
@@ -688,32 +731,28 @@ def get_main_menu_keyboard():
                 {"text": "🌆 Bản Tin Tối", "callback_data": "btn_briefing_evening"}
             ],
             [
-                {"text": "📰 Tin Tức Nóng", "callback_data": "btn_news_menu"},
-                {"text": "📝 Việc Cần Làm", "callback_data": "btn_todos"}
+                {"text": "💵 Sổ Thu Chi Cá Nhân", "callback_data": "btn_expenses"},
+                {"text": "📝 Việc Cần Làm (To-Do)", "callback_data": "btn_todos"}
             ],
             [
-                {"text": "🎨 Tạo Ảnh AI", "callback_data": "btn_help_draw"},
-                {"text": "📱 Tạo Mã QR", "callback_data": "btn_help_qr"}
+                {"text": "📰 Điểm Báo Tin Tức", "callback_data": "btn_news_menu"},
+                {"text": "🌤️ Thời Tiết Ninh Bình", "callback_data": "btn_weather"}
             ],
             [
-                {"text": "🐍 Chạy Python", "callback_data": "btn_help_run"},
-                {"text": "🎮 Đố Vui AI", "callback_data": "btn_quiz"}
+                {"text": "🎨 Tạo Ảnh AI Flux", "callback_data": "btn_help_draw"},
+                {"text": "📱 Tạo Mã QR Tức Thì", "callback_data": "btn_help_qr"}
             ],
             [
-                {"text": "🧠 Kỹ Năng & Bộ Nhớ", "callback_data": "btn_skills_memos"},
-                {"text": "📅 Âm Lịch Hôm Nay", "callback_data": "btn_lunar"}
+                {"text": "🧠 Kỹ Năng & Trí Nhớ", "callback_data": "btn_skills_memos"},
+                {"text": "📅 Âm Lịch & Hoàng Đạo", "callback_data": "btn_lunar"}
             ],
             [
-                {"text": "🌤️ Thời Tiết", "callback_data": "btn_weather"},
-                {"text": "💰 Tỷ Giá & Crypto", "callback_data": "btn_rates"}
+                {"text": "🐍 Chạy Code Python", "callback_data": "btn_help_run"},
+                {"text": "🎭 Đổi Tính Cách AI", "callback_data": "btn_personas"}
             ],
             [
-                {"text": "🎭 Đổi Tính Cách", "callback_data": "btn_personas"},
-                {"text": "⚙️ Đổi Model AI", "callback_data": "btn_models"}
-            ],
-            [
-                {"text": "📊 Thống Kê Bot", "callback_data": "btn_stats"},
-                {"text": "🔄 Làm Mới Chat", "callback_data": "btn_reset"}
+                {"text": "⚙️ Chọn Não Bộ Model AI", "callback_data": "btn_models"},
+                {"text": "🔄 Làm Mới Cuộc Trò Chuyện", "callback_data": "btn_reset"}
             ]
         ]
     }
@@ -730,7 +769,6 @@ def get_news_menu_keyboard():
                 {"text": "⚽ Thể Thao", "callback_data": "news_thethao"}
             ],
             [
-                {"text": "🌍 Thế Giới", "callback_data": "news_thegioi"},
                 {"text": "🔙 Quay Lại Menu", "callback_data": "btn_menu_back"}
             ]
         ]
@@ -773,7 +811,7 @@ def get_persona_menu_keyboard():
     }
 
 # ==========================================================
-# Feature: URL Web Page Reader
+# Feature: URL Web Page Reader & Link Summarizer
 # ==========================================================
 
 def fetch_url_content(url):
@@ -1002,13 +1040,13 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol", matched_skills=
     persona_desc = PERSONA_PROMPTS.get(persona_key, PERSONA_PROMPTS["assistant"])
 
     system_prompt = (
-        f"Bạn là Hermes - siêu trợ lý AI toàn năng, chủ động, thông thái và am hiểu sâu sắc mọi lĩnh vực tại Việt Nam.\n"
+        f"Bạn là Hermes - siêu trợ lý AI toàn năng, thực tế, thông thái và am hiểu sâu sắc mọi lĩnh vực đời sống, công nghệ, công việc tại Việt Nam.\n"
         f"Thời gian hiện tại: {time_str}.\n"
         f"{persona_desc}\n\n"
         "NGUYÊN TẮC HÀNH ĐỘNG TUYỆT ĐỐI:\n"
         "1. Luôn trực tiếp trả lời, báo cáo và giải quyết yêu cầu của người dùng, không bao giờ đùn đẩy bảo người dùng tự tìm.\n"
-        "2. Bạn sở hữu Hệ Thống Kỹ Năng Tự Học (Skills Engine), Bộ Nhớ Dài Hạn (Persistent Memory), và Quản lý Nhiệm Vụ (To-Do List).\n"
-        "3. Bạn có đủ các công cụ: Điểm Báo Tin Tức (`/news`), Chạy Code Python (`/run`), Tạo Ảnh AI Flux (`/draw`), Đọc Giọng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Tỷ Giá & Crypto, Thời Tiết, Lịch Âm Dương (`/amlich`), Đố Vui AI (`/quiz`).\n"
+        "2. Bạn sở hữu Hệ Thống Kỹ Năng Tự Học (Skills Engine), Bộ Nhớ Dài Hạn (Persistent Memory), Sổ Quản Lý Thu Chi Cá Nhân (Expense Tracker) và Quản lý Nhiệm Vụ (To-Do List).\n"
+        "3. Bạn có đủ các công cụ: Sổ Thu Chi (`/chitieu`), Tóm Tắt Bài Báo (`/summary`), Soạn Email/Văn Bản (`/soan`), Điểm Báo Tin Tức (`/news`), Chạy Code Python (`/run`), Tạo Ảnh AI Flux (`/draw`), Đọc Giọng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Thời Tiết, Lịch Âm Dương (`/amlich`).\n"
         "4. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
         "5. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể tạo ảnh' hay từ chối."
     )
@@ -1091,13 +1129,8 @@ def handle_callback_query(callback_query):
         send_message(chat_id, "⏳ Đang tổng hợp bản tin tối...")
         msg = generate_briefing("evening", subscriptions.get(chat_id_str, {}).get("location", "Ninh Bình"), chat_id=chat_id)
         send_message(chat_id, msg)
-    elif data == "btn_news_menu":
-        send_message(chat_id, "📰 **CHỌN CHUYÊN MỤC TIN TỨC NÓNG TRỰC TIẾP:**", reply_markup=get_news_menu_keyboard())
-    elif data.startswith("news_"):
-        topic = data.replace("news_", "")
-        send_message(chat_id, "⏳ Đang cập nhật luồng tin tức...")
-        news_content = get_live_news(topic)
-        send_message(chat_id, news_content, reply_markup=get_news_menu_keyboard())
+    elif data == "btn_expenses":
+        send_message(chat_id, get_expense_report(chat_id_str))
     elif data == "btn_todos":
         todos = user_todos.get(chat_id_str, [])
         if todos:
@@ -1106,64 +1139,17 @@ def handle_callback_query(callback_query):
         else:
             msg = "📝 Danh sách việc cần làm hiện đang trống!\n👉 Gõ `/todo add [nội dung]` để thêm công việc mới."
         send_message(chat_id, msg)
-    elif data == "btn_quiz":
-        send_message(chat_id, "⏳ Hermes đang soạn câu hỏi đố vui...")
-        quiz_prompt = (
-            "Hãy tạo 1 câu hỏi đố vui kiến thức thú vị bằng tiếng Việt (chủ đề công nghệ, khoa học, đố mẹo hoặc đời sống).\n"
-            "Format trả về chính xác:\n"
-            "Câu hỏi: [Nội dung]\n"
-            "A. [Đáp án A]\n"
-            "B. [Đáp án B]\n"
-            "C. [Đáp án C]\n"
-            "D. [Đáp án D]\n"
-            "Đáp án đúng: [A/B/C/D]\n"
-            "Giải thích: [Ngắn gọn 1 câu]"
-        )
-        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-        try:
-            r = requests.post(f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions", headers=headers, json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": quiz_prompt}], "temperature": 0.8}, timeout=15)
-            q_text = r.json()["choices"][0]["message"]["content"]
-            ans_match = re.search(r'Đáp án đúng:\s*([ABCD])', q_text, re.IGNORECASE)
-            ans = ans_match.group(1).upper() if ans_match else "A"
-            active_quizzes[chat_id_str] = {"answer": ans, "full_text": q_text}
-            
-            # Create inline answer buttons
-            q_keyboard = {
-                "inline_keyboard": [
-                    [
-                        {"text": "🅰️ A", "callback_data": "quiz_ans_A"},
-                        {"text": "🅱️ B", "callback_data": "quiz_ans_B"}
-                    ],
-                    [
-                        {"text": "🅲 C", "callback_data": "quiz_ans_C"},
-                        {"text": "🅳 D", "callback_data": "quiz_ans_D"}
-                    ]
-                ]
-            }
-            send_message(chat_id, f"🎮 **ĐỐ VUI TRÍ TUỆ CÙNG HERMES:**\n\n{q_text.split('Đáp án đúng')[0].strip()}", reply_markup=q_keyboard)
-        except Exception as e:
-            send_message(chat_id, "⚠️ Lỗi tạo câu đố, anh bấm lại nhé!")
-    elif data.startswith("quiz_ans_"):
-        user_choice = data.replace("quiz_ans_", "")
-        quiz_data = active_quizzes.get(chat_id_str)
-        if quiz_data:
-            correct_ans = quiz_data.get("answer", "A")
-            full_txt = quiz_data.get("full_text", "")
-            if user_choice == correct_ans:
-                send_message(chat_id, f"🎉 **CHÍNH XÁC!** Anh trả lời rất xuất sắc!\n\n💡 {full_txt[full_txt.find('Giải thích:'):] if 'Giải thích:' in full_txt else ''}")
-            else:
-                send_message(chat_id, f"❌ **CHƯA ĐÚNG RỒI!**\nĐáp án chính xác là **{correct_ans}**!\n\n💡 {full_txt[full_txt.find('Giải thích:'):] if 'Giải thích:' in full_txt else ''}")
-            active_quizzes.pop(chat_id_str, None)
-        else:
-            send_message(chat_id, "⚠️ Câu đố này đã kết thúc, anh bấm **[🎮 Đố Vui AI]** để chơi câu mới nhé!")
+    elif data == "btn_news_menu":
+        send_message(chat_id, "📰 **CHỌN CHUYÊN MỤC TIN TỨC NÓNG TRỰC TIẾP:**", reply_markup=get_news_menu_keyboard())
+    elif data.startswith("news_"):
+        topic = data.replace("news_", "")
+        send_message(chat_id, "⏳ Đang cập nhật luồng tin tức...")
+        news_content = get_live_news(topic)
+        send_message(chat_id, news_content, reply_markup=get_news_menu_keyboard())
     elif data == "btn_weather":
         send_message(chat_id, "⏳ Đang kết nối trạm thời tiết Ninh Bình...")
         w = get_live_weather("thời tiết ninh bình")
         send_message(chat_id, w if w else "⚠️ Không thể lấy dữ liệu thời tiết.")
-    elif data == "btn_rates":
-        send_message(chat_id, "⏳ Đang tải tỷ giá ngoại tệ & giá Crypto...")
-        r = get_live_rates()
-        send_message(chat_id, r if r else "⚠️ Không thể lấy dữ liệu tỷ giá.")
     elif data == "btn_lunar":
         send_message(chat_id, get_lunar_calendar_info())
     elif data == "btn_help_run":
@@ -1187,20 +1173,6 @@ def handle_callback_query(callback_query):
         send_message(chat_id, msg)
     elif data == "btn_personas":
         send_message(chat_id, "🎭 **Chọn Tính Cách & Phong Cách Nói Chuyện Của Hermes:**", reply_markup=get_persona_menu_keyboard())
-    elif data == "btn_stats":
-        uptime_m = int((time.time() - START_TIME) / 60)
-        current_m = user_model_override.get(chat_id_str, "Tự động (Smart Router)")
-        current_p = user_personas.get(chat_id_str, "Trợ Lý Tận Tâm (Mặc định)")
-        msg = (
-            f"📊 **BÁO CÁO THỐNG KÊ HỆ THỐNG BOT 24/7:**\n\n"
-            f"• ⏱️ **Thời gian hoạt động liên tục (Uptime):** {uptime_m} phút\n"
-            f"• 🧠 **Model AI hiện tại:** `{current_m}`\n"
-            f"• 🎭 **Tính cách hiện tại:** `{current_p}`\n"
-            f"• 💾 **Ký ức đã lưu trong bộ nhớ:** `{len(user_memories.get(chat_id_str, []))}` mục\n"
-            f"• ⚡ **Số kỹ năng (Skills) đã đăng ký:** `{len(skills_registry)}` kỹ năng\n"
-            f"• 🌐 **Trạng thái máy chủ:** `100% Hoạt động & Không bao giờ ngủ (Anti-Sleep Active)`"
-        )
-        send_message(chat_id, msg)
     elif data == "btn_models":
         send_message(chat_id, "⚙️ **Chọn Não Bộ AI Cho Cuộc Trò Chuyện:**", reply_markup=get_model_menu_keyboard())
     elif data == "btn_reset":
@@ -1277,22 +1249,21 @@ def handle_update(update):
         # Command: /start or /menu
         if text == "/start" or text == "/menu":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Ultimate Edition 24/7)!**\n\n"
-                "🚀 **Bộ Công Cụ & Siêu Năng Lực Toàn Diện:**\n"
-                "• 📰 **Điểm Báo & Tin Tức Nóng (`/news`):** Đọc tin tức công nghệ, tài chính trực tiếp.\n"
-                "• 📝 **Quản Lý Công Việc (`/todo`):** Ghi nhớ và theo dõi to-do list hàng ngày.\n"
-                "• 🎮 **Đố Vui AI Trí Tuệ (`/quiz`):** Thử thách trí tuệ với các câu đố thú vị.\n"
-                "• 🐍 **Chạy Code Python (`/run`):** Thực thi code Python và lấy kết quả trong mili-giây.\n"
-                "• 🪙 **Tra Cứu Crypto Siêu Tốc:** Gõ `/btc`, `/eth`, `/sol`, `/bnb`.\n"
-                "• 🎭 **Đổi Tính Cách AI (`/persona`):** Trợ lý, Kỹ sư Senior, Hài hước, Gia sư, Giám đốc.\n"
-                "• 📅 **Lịch Âm Dương & Can Chi (`/amlich`):** Tra cứu ngày Âm lịch Bính Ngọ & Giờ hoàng đạo.\n"
-                "• ⚡ **Tự Học & Tự Tạo Skill (`/skill`):** Dạy bot kỹ năng chuyên môn mới theo ý anh.\n"
-                "• 💾 **Bộ Nhớ Vĩnh Viễn (`/memo`):** Lưu trữ sở thích, dự án không bao giờ quên.\n"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý Đời Sống & Công Việc 24/7!**\n\n"
+                "💼 **Các Tiện Ích Đời Sống Thực Tế Hữu Dụng:**\n"
+                "• 💵 **Sổ Thu Chi Cá Nhân (`/chitieu`):** Nhắn *'Ăn sáng 35k'*, *'Đổ xăng 70k'* để bot tự ghi sổ.\n"
+                "• 📝 **Quản Lý Công Việc (`/todo`):** Theo dõi công việc cần làm hàng ngày.\n"
+                "• 📑 **Tóm Tắt Bài Báo & Link (`/summary [link]`):** Tóm tắt nhanh nội dung chính 3 ý.\n"
+                "• ✉️ **Soạn Văn Bản & Email (`/soan [nội dung]`):** Viết thư từ, hợp đồng, email chỉn chu.\n"
+                "• 📰 **Điểm Báo & Tin Tức Nóng (`/news`):** Đọc tin tức công nghệ, đời sống trực tiếp.\n"
+                "• 🌤️ **Dự Báo Thời Tiết Ninh Bình:** Nhiệt độ, xác suất mưa cập nhật trực tiếp.\n"
+                "• 📅 **Lịch Âm Dương & Hoàng Đạo (`/amlich`):** Xem ngày Âm lịch Bính Ngọ.\n"
+                "• 🐍 **Chạy Code Python (`/run`):** Thực thi code lấy kết quả tức thì.\n"
                 "• 🎨 **Tạo Ảnh AI Nghệ Thuật (`/draw [mô tả]`):** Model Flux.1 8K sắc nét.\n"
                 "• 🔊 **Đọc Giọng Nói TTS (`/tts [văn bản]`):** Chuyển lời văn thành voice note.\n"
-                "• 📱 **Tạo Mã QR Tức Thì (`/qr [link/nội dung]`):** Tạo mã QR độ nét cao.\n"
+                "• 📱 **Tạo Mã QR Tức Thì (`/qr [link/nội dung]`):** Tạo mã QR cho link, WiFi, STK.\n"
                 "• 📰 **Bản Tin Sáng (07:00) & Tối (20:00):** Tự động gửi đúng giờ mỗi ngày.\n\n"
-                "👇 **Anh có thể chạm nhanh các nút bên dưới để trải nghiệm ngay:**"
+                "👇 **Anh chạm nhanh các nút bên dưới để sử dụng ngay:**"
             )
             send_message(chat_id, welcome, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
             return
@@ -1300,42 +1271,102 @@ def handle_update(update):
         # Command: /help
         if text == "/help":
             help_text = (
-                "📖 **DANH SÁCH LỆNH VÀ CÔNG CỤ TỰ ĐỘNG**\n\n"
-                "1. 📰 **/news** — Xem điểm tin tức nóng trực tiếp.\n"
-                "2. 📝 **/todo [add | done | clear]** — Quản lý công việc cần làm.\n"
-                "3. 🎮 **/quiz** — Chơi đố vui trí tuệ với AI.\n"
-                "4. 🪙 **/btc, /eth, /sol, /bnb** — Xem giá Crypto thời gian thực.\n"
-                "5. 🐍 **/run [code]** — Thực thi code Python trực tiếp.\n"
-                "6. 🎭 **/persona [tên]** — Đổi tính cách & phong cách AI.\n"
-                "7. 📅 **/amlich** — Xem lịch Âm Dương, Giờ hoàng đạo.\n"
-                "8. ⚡ **/skill** — Dạy kỹ năng chuyên gia mới cho bot.\n"
-                "9. 🧠 **/memo** — Quản lý bộ nhớ vĩnh viễn.\n"
-                "10. 🎨 **/draw [mô tả]** — Tạo ảnh AI Flux.1 sắc nét.\n"
-                "11. 🔊 **/tts [văn bản]** — Chuyển văn bản thành giọng nói.\n"
-                "12. 📱 **/qr [link]** — Tạo ảnh mã QR tức thì.\n"
-                "13. 🖼️ **/capture [link]** — Chụp ảnh màn hình trang web.\n"
-                "14. 📰 **/daily [on | off | now]** — Quản lý bản tin sáng & tối.\n"
-                "15. 📊 **/stats** — Xem thống kê hệ thống bot.\n"
+                "📖 **HƯỚNG DẪN CÁC CÔNG CỤ HỮU ÍCH HÀNG NGÀY**\n\n"
+                "1. 💵 **/chitieu** — Xem báo cáo sổ thu chi cá nhân.\n"
+                "   • Nhắn tự nhiên: *'Ăn trưa 40k'*, *'Đổ xăng 70k'*, *'Nhận lương 15tr'*\n"
+                "   • Hoặc gõ: `/chi 50k ăn phở`, `/thu 5tr tiền dự án`\n"
+                "2. 📝 **/todo [add | done | clear]** — Quản lý danh sách việc cần làm.\n"
+                "3. 📑 **/summary [link]** — Tóm tắt nội dung bài báo, trang web.\n"
+                "4. ✉️ **/soan [yêu cầu]** — Soạn thảo email, văn bản trang trọng.\n"
+                "5. 📰 **/news [congnghe | thoisu | kinhdoanh]** — Đọc điểm tin nóng.\n"
+                "6. 🌤️ **/thoitiet [địa điểm]** — Xem thời tiết thực tế.\n"
+                "7. 📅 **/amlich** — Tra cứu ngày Âm lịch & Giờ hoàng đạo.\n"
+                "8. 🐍 **/run [code]** — Chạy thử nghiệm code Python.\n"
+                "9. ⚡ **/skill** — Dạy kỹ năng chuyên gia mới cho bot.\n"
+                "10. 🧠 **/memo** — Quản lý bộ nhớ dài hạn vĩnh viễn.\n"
+                "11. 🎨 **/draw [mô tả]** — Vẽ ảnh AI Flux.1 chất lượng cao.\n"
+                "12. 🔊 **/tts [văn bản]** — Tạo file âm thanh giọng nói.\n"
+                "13. 📱 **/qr [link]** — Tạo ảnh mã QR tức thì.\n"
+                "14. 🖼️ **/capture [link]** — Chụp ảnh toàn cảnh trang web.\n"
+                "15. 📰 **/daily [on | off | now]** — Quản lý bản tin sáng & tối.\n"
                 "16. 🔄 **/reset** — Làm mới cuộc trò chuyện."
             )
             send_message(chat_id, help_text, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
             return
 
-        # Fast Crypto Shortcuts
-        if text.lower() in ["/btc", "btc", "bitcoin"]:
-            send_message(chat_id, get_single_crypto("BTCUSDT", "Bitcoin"), reply_to_message_id=message_id)
-            set_message_reaction(chat_id, message_id, "🔥")
+        # Natural Expense Detection: "Ăn sáng 35k", "Đổ xăng 70k", "/chi 50k ăn trưa", "/thu 10tr lương"
+        exp_parsed = parse_expense_natural(text)
+        if exp_parsed:
+            now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
+            date_str = now_vn.strftime("%Y-%m-%d")
+            time_str = now_vn.strftime("%H:%M")
+            if chat_id_str not in user_expenses:
+                user_expenses[chat_id_str] = []
+                
+            entry = {
+                "type": exp_parsed["type"],
+                "amount": exp_parsed["amount"],
+                "note": exp_parsed["note"],
+                "date": date_str,
+                "time_str": time_str
+            }
+            user_expenses[chat_id_str].append(entry)
+            save_expenses(user_expenses)
+            
+            icon = "🟢 Thu vào" if exp_parsed["type"] == "income" else "🔴 Đã chi"
+            send_message(
+                chat_id, 
+                f"💵 **ĐÃ GHI VÀO SỔ THU CHI:**\n\n"
+                f"• Khoản: **{icon}**\n"
+                f"• Số tiền: **{exp_parsed['amount']:,} VNĐ**\n"
+                f"• Nội dung: _{exp_parsed['note']}_\n"
+                f"• Thời gian: {time_str} ({date_str})\n\n"
+                f"👉 Gõ `/chitieu` để xem tổng kết chi tiêu hôm nay và tháng này nhé anh!", 
+                reply_to_message_id=message_id
+            )
+            set_message_reaction(chat_id, message_id, "👍")
             return
-        if text.lower() in ["/eth", "eth", "ethereum"]:
-            send_message(chat_id, get_single_crypto("ETHUSDT", "Ethereum"), reply_to_message_id=message_id)
-            set_message_reaction(chat_id, message_id, "🔥")
+
+        # Command: /chitieu or /sothuchi
+        if text in ["/chitieu", "/sothuchi", "/thuchi", "sổ thu chi", "xem chi tiêu"]:
+            send_message(chat_id, get_expense_report(chat_id_str), reply_to_message_id=message_id)
+            set_message_reaction(chat_id, message_id, "👍")
             return
-        if text.lower() in ["/sol", "sol", "solana"]:
-            send_message(chat_id, get_single_crypto("SOLUSDT", "Solana"), reply_to_message_id=message_id)
-            set_message_reaction(chat_id, message_id, "🔥")
+
+        # Command: /summary or /tomtat [link]
+        sum_match = re.search(r'^(?:/summary|/tomtat|tóm\s+tắt)\s+(https?://[^\s]+)', text, re.IGNORECASE)
+        if sum_match:
+            target_url = sum_match.group(1)
+            send_message(chat_id, f"📑 Đang tải và đọc nội dung từ link: `{target_url}`...")
+            content_text = fetch_url_content(target_url)
+            if content_text:
+                sum_prompt = (
+                    f"Hãy đọc nội dung bài viết dưới đây và tóm tắt thành 3 đến 5 ý cốt lõi quan trọng nhất bằng tiếng Việt.\n"
+                    f"Trình bày chuyên nghiệp, gạch đầu dòng rõ ràng kèm kết luận ngắn gọn.\n\n"
+                    f"Nội dung bài viết:\n{content_text[:7000]}"
+                )
+                chosen_model, mode_tag = select_model_for_task("summary", chat_id=chat_id)
+                reply = query_llm(chat_id, sum_prompt, chosen_model=chosen_model)
+                send_message(chat_id, f"📑 **TÓM TẮT BÀI BÁO / TRANG WEB:**\n🔗 _{target_url}_\n\n{reply}", reply_to_message_id=message_id)
+                set_message_reaction(chat_id, message_id, "🔥")
+            else:
+                send_message(chat_id, "⚠️ Không thể đọc nội dung từ đường link này, anh kiểm tra lại link nhé!", reply_to_message_id=message_id)
             return
-        if text.lower() in ["/bnb", "bnb"]:
-            send_message(chat_id, get_single_crypto("BNBUSDT", "Binance Coin"), reply_to_message_id=message_id)
+
+        # Command: /soan [nội dung] (Soạn thảo văn bản / email)
+        soan_match = re.search(r'^(?:/soan|soạn\s+email|soạn\s+thư|viết\s+email|viết\s+đơn)\s+(.+)', text, re.IGNORECASE)
+        if soan_match:
+            soan_req = soan_match.group(1).strip()
+            send_message(chat_id, "✍️ Hermes đang soạn thảo văn bản chuyên nghiệp cho anh...")
+            soan_prompt = (
+                f"Bạn là chuyên gia soạn thảo văn bản, thư từ và email chuyên nghiệp.\n"
+                f"Hãy soạn thảo một văn bản/email chỉn chu, ngôn từ chuẩn mực, cấu trúc trang trọng theo yêu cầu sau:\n"
+                f"\"{soan_req}\"\n\n"
+                f"Bao gồm: Tiêu đề (Subject), Lời chào mở đầu, Nội dung chính, Lời kết và Ký tên."
+            )
+            chosen_model, mode_tag = select_model_for_task("soan van ban", chat_id=chat_id)
+            reply = query_llm(chat_id, soan_prompt, chosen_model=chosen_model)
+            send_message(chat_id, f"✍️ **BẢN DỰ THẢO VĂN BẢN / EMAIL:**\n\n{reply}", reply_to_message_id=message_id)
             set_message_reaction(chat_id, message_id, "🔥")
             return
 
@@ -1394,11 +1425,6 @@ def handle_update(update):
             set_message_reaction(chat_id, message_id, "🔥")
             return
 
-        # Command: /quiz (Đố vui AI)
-        if text in ["/quiz", "đố vui", "chơi game", "câu đố"]:
-            handle_callback_query({"id": "0", "data": "btn_quiz", "message": {"chat": {"id": chat_id}}})
-            return
-
         # Command: /amlich or /licham (Lịch vạn niên & Can Chi)
         if text in ["/amlich", "/licham", "âm lịch", "lịch âm", "hôm nay ngày mấy âm"]:
             send_message(chat_id, get_lunar_calendar_info(), reply_to_message_id=message_id)
@@ -1417,24 +1443,6 @@ def handle_update(update):
                     send_message(chat_id, "⚠️ Chọn 1 trong các tính cách: `assistant`, `coder`, `humorous`, `teacher`, `executive`", reply_to_message_id=message_id)
             else:
                 send_message(chat_id, "🎭 **Chọn Tính Cách & Phong Cách Nói Chuyện:**", reply_markup=get_persona_menu_keyboard())
-            return
-
-        # Command: /stats (Thống kê Bot)
-        if text == "/stats":
-            uptime_m = int((time.time() - START_TIME) / 60)
-            current_m = user_model_override.get(chat_id_str, "Tự động (Smart Router)")
-            current_p = user_personas.get(chat_id_str, "Trợ Lý Tận Tâm (Mặc định)")
-            msg = (
-                f"📊 **BÁO CÁO THỐNG KÊ HỆ THỐNG BOT 24/7:**\n\n"
-                f"• ⏱️ **Thời gian hoạt động liên tục (Uptime):** {uptime_m} phút\n"
-                f"• 🧠 **Model AI hiện tại:** `{current_m}`\n"
-                f"• 🎭 **Tính cách hiện tại:** `{current_p}`\n"
-                f"• 💾 **Ký ức đã lưu trong bộ nhớ:** `{len(user_memories.get(chat_id_str, []))}` mục\n"
-                f"• ⚡ **Số kỹ năng (Skills) đã đăng ký:** `{len(skills_registry)}` kỹ năng\n"
-                f"• 📝 **Số công việc đang quản lý:** `{len(user_todos.get(chat_id_str, []))}` mục\n"
-                f"• 🌐 **Trạng thái máy chủ:** `100% Hoạt động & Không bao giờ ngủ (Anti-Sleep Active)`"
-            )
-            send_message(chat_id, msg, reply_to_message_id=message_id)
             return
 
         # Command: /skills or /skill (Quản lý Kỹ năng Tự Tạo)
@@ -1595,7 +1603,7 @@ def handle_update(update):
                     save_subscriptions(subscriptions)
                     send_message(chat_id, "⏸️ Đã tắt nhận bản tin tự động hàng ngày.", reply_to_message_id=message_id)
                 elif action in ["now", "test", "mau", "mẫu"]:
-                    send_message(chat_id, "⏳ Đang tổng hợp dữ liệu thời tiết, tỷ giá & tin tức để tạo bản tin cho anh...")
+                    send_message(chat_id, "⏳ Đang tổng hợp dữ liệu thời tiết, tin tức để tạo bản tin cho anh...")
                     briefing = generate_briefing("morning", subscriptions[chat_id_str].get("location", "Ninh Bình"), chat_id=chat_id)
                     send_message(chat_id, briefing, reply_to_message_id=message_id)
                 elif action in ["time", "gio", "giờ"] and len(parts) >= 4:
@@ -1663,14 +1671,14 @@ def handle_update(update):
                 send_message(chat_id, "⚠️ Không thể tải tin nhắn thoại, anh gửi lại nhé!", reply_to_message_id=message_id)
             return
 
-        # Case B: Photo (Vision)
+        # Case B: Photo (Vision / OCR Invoice / Documents)
         if photos:
             best_photo = photos[-1]
             photo_bytes, _ = download_telegram_file(best_photo["file_id"])
             
             if photo_bytes:
                 b64_img = base64.b64encode(photo_bytes).decode("utf-8")
-                prompt_text = caption if caption else "Hãy xem kỹ bức ảnh này và phân tích, mô tả chi tiết nội dung hoặc giải đáp yêu cầu trong ảnh."
+                prompt_text = caption if caption else "Hãy xem kỹ bức ảnh này (nếu là hóa đơn/biên lai/chuyển khoản, hãy đọc số tiền, người gửi/nhận, ngày giờ; nếu là tài liệu/ảnh chụp, hãy phân tích chi tiết)."
                 
                 content_payload = [
                     {"type": "text", "text": prompt_text},
@@ -1769,23 +1777,14 @@ def handle_update(update):
             set_message_reaction(chat_id, message_id, "👍")
             return
 
-        # Financial & Crypto Rates Lookup
-        if is_rates_query(text):
-            logger.info(f"Fetching financial rates for: {text}")
-            rates_data = get_live_rates()
-            user_query = (
-                f"Câu hỏi của người dùng: {text}\n\n"
-                f"{rates_data}\n\n"
-                f"Hãy dựa vào dữ liệu tài chính thời gian thực ở trên để trả lời chi tiết, chính xác cho người dùng."
-            )
         # Weather Lookup
-        elif is_weather_query(text) or any(w in text.lower() for kw in ["thời tiết", "mưa", "nắng", "nhiệt độ"] for w in [kw]):
+        if is_weather_query(text) or any(w in text.lower() for kw in ["thời tiết", "mưa", "nắng", "nhiệt độ"] for w in [kw]):
             logger.info(f"Fetching live weather for: {text}")
             weather_data = get_live_weather(text)
             user_query = (
                 f"Câu hỏi của người dùng: {text}\n\n"
                 f"{weather_data}\n\n"
-                f"Hãy dựa vào dữ liệu khí tượng trực tiếp ở trên để báo cáo thời tiết và phân tích chi tiết, đưa ra lời khuyên đi chơi/ăn uống dịp 2/9 cho người dùng."
+                f"Hãy dựa vào dữ liệu khí tượng trực tiếp ở trên để báo cáo thời tiết và phân tích chi tiết, đưa ra lời khuyên đi chơi/ăn uống/hoạt động cho người dùng."
             )
         # URL Reading
         elif re.search(r'(https?://[^\s]+)', text):
@@ -1822,7 +1821,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Ultimate Suite...")
+    logger.info("Starting Cloud Long Polling Loop with Practical Productivity Suite...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
