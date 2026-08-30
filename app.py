@@ -113,9 +113,12 @@ app = Flask(__name__)
 def health_check():
     return jsonify({
         "status": "healthy",
-        "service": "Hermes Telegram Autonomous Bot 24/7 (Persistent Daily Briefing Edition)",
+        "service": "Hermes Telegram Super-Bot 24/7 (Ultimate Edition)",
         "default_frontier_model": "gpt-5.6-sol",
         "features": [
+            "interactive_inline_buttons",
+            "voice_audio_processing",
+            "live_crypto_and_fx_rates",
             "persistent_daily_briefings",
             "morning_and_evening_cron",
             "live_realtime_weather",
@@ -178,6 +181,46 @@ def is_weather_query(text):
     return any(kw in text_lower for kw in keywords)
 
 # ==========================================================
+# Real-Time Financial & Crypto Rates
+# ==========================================================
+
+def get_live_rates():
+    results = []
+    try:
+        r = requests.get('https://open.er-api.com/v6/latest/USD', timeout=5)
+        rates = r.json().get('rates', {})
+        usd_vnd = rates.get('VND', 0)
+        eur_usd = rates.get('EUR', 1)
+        eur_vnd = (usd_vnd / eur_usd) if eur_usd else 0
+        jpy_usd = rates.get('JPY', 1)
+        jpy_vnd = (usd_vnd / jpy_usd) if jpy_usd else 0
+        results.append(
+            f"💵 **TỶ GIÁ NGOẠI TỆ (REAL-TIME):**\n"
+            f"• 1 USD = **{usd_vnd:,.0f} VND**\n"
+            f"• 1 EUR = **{eur_vnd:,.0f} VND**\n"
+            f"• 100 JPY = **{(jpy_vnd*100):,.0f} VND**"
+        )
+    except Exception as e:
+        logger.warning(f"FX error: {e}")
+        
+    try:
+        crypto_lines = []
+        for sym, name in [('BTCUSDT', 'Bitcoin (BTC)'), ('ETHUSDT', 'Ethereum (ETH)'), ('SOLUSDT', 'Solana (SOL)'), ('BNBUSDT', 'Binance Coin (BNB)')]:
+            r = requests.get(f'https://data-api.binance.vision/api/v3/ticker/price?symbol={sym}', timeout=4)
+            p = float(r.json().get('price', 0))
+            crypto_lines.append(f"• {name}: **${p:,.2f}**")
+        results.append("🪙 **THỊ TRƯỜNG TIỀN MÃ HÓA (CRYPTO 24/7):**\n" + "\n".join(crypto_lines))
+    except Exception as e:
+        logger.warning(f"Crypto error: {e}")
+        
+    return "\n\n".join(results)
+
+def is_rates_query(text):
+    keywords = ["tỷ giá", "giá usd", "giá euro", "giá vàng", "giá btc", "giá bitcoin", "giá eth", "giá coin", "crypto", "tiền tệ", "usd vnd"]
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in keywords)
+
+# ==========================================================
 # Autonomous Daily Briefing Generators
 # ==========================================================
 
@@ -185,6 +228,7 @@ def generate_briefing(briefing_type="morning", location="Ninh Bình", chat_id=No
     now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
     time_str = now_vn.strftime("%A, ngày %d/%m/%Y")
     weather_info = get_live_weather(location)
+    rates_info = get_live_rates()
     
     mem_info = ""
     if chat_id and chat_id in user_memories and user_memories[chat_id]:
@@ -199,12 +243,14 @@ def generate_briefing(briefing_type="morning", location="Ninh Bình", chat_id=No
         prompt = (
             f"Bạn là Hermes - Siêu Trợ Lý AI cao cấp.\n"
             f"Hãy soạn một **BẢN TIN TỔNG HỢP BUỔI SÁNG** ({time_str}) thật chuyên nghiệp, năng lượng và tinh tế cho người dùng tại {location}.\n"
-            f"Dữ liệu thời tiết thực tế:\n{weather_info}\n{mem_info}\n\n"
+            f"Dữ liệu thời tiết thực tế:\n{weather_info}\n\n"
+            f"Dữ liệu thị trường tài chính:\n{rates_info}\n{mem_info}\n\n"
             "Cấu trúc bản tin gồm:\n"
             "1. 🌅 **Lời chào buổi sáng & Ngày tháng**\n"
             "2. 🌤️ **Dự báo Thời Tiết Trong Ngày** (Nhiệt độ, xác suất mưa, lời khuyên trang phục/hoạt động)\n"
-            "3. 📰 **Điểm Tin Nhanh & Xu Hướng Trong Ngày** (Công nghệ AI, đời sống số, mẹo năng suất)\n"
-            "4. 💡 **Lời chúc ngày mới & Câu nói truyền cảm hứng**\n"
+            "3. 💰 **Điểm Nhanh Tài Chính & Thị Trường** (Tỷ giá USD, Giá Bitcoin nổi bật)\n"
+            "4. 📰 **Điểm Tin Nhanh & Xu Hướng Trong Ngày** (Công nghệ AI, đời sống số, mẹo năng suất)\n"
+            "5. 💡 **Lời chúc ngày mới & Câu nói truyền cảm hứng**\n"
             "Trình bày chuẩn Markdown, icon sinh động, bố cục thoáng đẹp mắt trên Telegram."
         )
     else:
@@ -236,7 +282,7 @@ def generate_briefing(briefing_type="morning", location="Ninh Bình", chat_id=No
     return f"🌅 **[BẢN TIN TỔNG HỢP {time_str}]**\n\nChúc anh một ngày thật tuyệt vời và nhiều may mắn!"
 
 # ==========================================================
-# Telegram Visual Feedback Helpers (Reactions & Typing)
+# Telegram Visual Feedback Helpers (Reactions & Typing & Buttons)
 # ==========================================================
 
 def send_telegram_request(method, payload):
@@ -282,17 +328,25 @@ class TypingKeeper:
     def stop(self):
         self.running = False
 
-def send_message(chat_id, text, reply_to_message_id=None):
+def send_message(chat_id, text, reply_to_message_id=None, reply_markup=None):
     chunk_size = 4000
     for i in range(0, len(text), chunk_size):
         chunk = text[i:i + chunk_size]
         payload = {"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"}
         if reply_to_message_id and i == 0:
             payload["reply_to_message_id"] = reply_to_message_id
+        if reply_markup and (i + chunk_size >= len(text)):
+            payload["reply_markup"] = reply_markup
         res = send_telegram_request("sendMessage", payload)
         if not res or not res.get("ok"):
             payload.pop("parse_mode", None)
             send_telegram_request("sendMessage", payload)
+
+def answer_callback_query(callback_query_id, text=None):
+    payload = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    send_telegram_request("answerCallbackQuery", payload)
 
 def download_telegram_file(file_id):
     file_info = send_telegram_request("getFile", {"file_id": file_id})
@@ -304,6 +358,42 @@ def download_telegram_file(file_id):
     if r.status_code == 200:
         return r.content, file_path
     return None, ""
+
+def get_main_menu_keyboard():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🌅 Bản Tin Sáng", "callback_data": "btn_briefing_morning"},
+                {"text": "🌆 Bản Tin Tối", "callback_data": "btn_briefing_evening"}
+            ],
+            [
+                {"text": "🌤️ Thời Tiết Ninh Bình", "callback_data": "btn_weather"},
+                {"text": "💰 Tỷ Giá & Crypto", "callback_data": "btn_rates"}
+            ],
+            [
+                {"text": "🧠 Chọn Model AI", "callback_data": "btn_models"},
+                {"text": "🔄 Làm Mới Chat", "callback_data": "btn_reset"}
+            ]
+        ]
+    }
+
+def get_model_menu_keyboard():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✨ Tự Động (Smart Router)", "callback_data": "setmodel_auto"},
+                {"text": "🧠 GPT-5.6 Sol (Mạnh nhất)", "callback_data": "setmodel_sol"}
+            ],
+            [
+                {"text": "💻 GPT-5.3 Codex (Code)", "callback_data": "setmodel_code"},
+                {"text": "⚡ GPT-5.6 Terra (1s Siêu tốc)", "callback_data": "setmodel_terra"}
+            ],
+            [
+                {"text": "🖋️ Claude Sonnet 4.6", "callback_data": "setmodel_claude"},
+                {"text": "🔙 Quay Lại Menu", "callback_data": "btn_menu_back"}
+            ]
+        ]
+    }
 
 # ==========================================================
 # Feature: URL Web Page Reader
@@ -329,13 +419,13 @@ def fetch_url_content(url):
 # Feature: Intelligent Dynamic Model Router
 # ==========================================================
 
-def select_model_for_task(text, has_photo=False, has_doc=False, file_name="", chat_id=None):
+def select_model_for_task(text, has_photo=False, has_doc=False, has_audio=False, file_name="", chat_id=None):
     if chat_id and str(chat_id) in user_model_override and user_model_override[str(chat_id)]:
         override = user_model_override[str(chat_id)]
         return override, f"⚙️ [Chế độ Cố định: {override}]"
 
-    if has_photo:
-        return "gpt-5.6-sol", "👁️ [Phân tích Thị giác - GPT-5.6 Sol]"
+    if has_photo or has_audio:
+        return "gpt-5.6-sol", "👁️ [Phân tích Đa phương tiện - GPT-5.6 Sol]"
 
     if has_doc:
         ext = os.path.splitext(file_name)[1].lower()
@@ -432,7 +522,6 @@ def reminder_scheduler_loop():
         try:
             now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
             today_str = now_vn.strftime("%Y-%m-%d")
-            time_now_str = now_vn.strftime("%H:%M")
             hour_int = now_vn.hour
             minute_int = now_vn.minute
             
@@ -446,21 +535,21 @@ def reminder_scheduler_loop():
                 morning_time = config.get("morning_time", "07:00")
                 evening_time = config.get("evening_time", "20:00")
                 
-                # Morning Briefing Trigger (07:00 or within morning window 07:00 - 07:15)
+                # Morning Briefing Trigger (07:00 or window)
                 m_h, m_m = [int(x) for x in morning_time.split(":")]
                 if (hour_int == m_h and minute_int >= m_m and minute_int <= m_m + 15) or (hour_int == m_h and config.get("last_morning_date") != today_str):
                     if config.get("last_morning_date") != today_str:
-                        logger.info(f"Triggering Morning Briefing for {chat_id} at {today_str} {time_now_str}")
+                        logger.info(f"Triggering Morning Briefing for {chat_id} at {today_str}")
                         briefing_msg = generate_briefing("morning", location, chat_id=chat_id)
                         send_message(chat_id, briefing_msg)
                         config["last_morning_date"] = today_str
                         save_subscriptions(subscriptions)
                         
-                # Evening Briefing Trigger (20:00 or within evening window 20:00 - 20:15)
+                # Evening Briefing Trigger (20:00 or window)
                 e_h, e_m = [int(x) for x in evening_time.split(":")]
                 if (hour_int == e_h and minute_int >= e_m and minute_int <= e_m + 15) or (hour_int == e_h and config.get("last_evening_date") != today_str):
                     if config.get("last_evening_date") != today_str:
-                        logger.info(f"Triggering Evening Briefing for {chat_id} at {today_str} {time_now_str}")
+                        logger.info(f"Triggering Evening Briefing for {chat_id} at {today_str}")
                         briefing_msg = generate_briefing("evening", location, chat_id=chat_id)
                         send_message(chat_id, briefing_msg)
                         config["last_evening_date"] = today_str
@@ -528,10 +617,9 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
         f"Thời gian hiện tại: {time_str}.\n\n"
         "NGUYÊN TẮC HÀNH ĐỘNG TUYỆT ĐỐI:\n"
         "1. Luôn trực tiếp trả lời, báo cáo và giải quyết yêu cầu của người dùng, không bao giờ đùn đẩy bảo người dùng tự tìm.\n"
-        "2. Bạn đã được trang bị hệ thống Gửi Bản Tin Tổng Hợp Tự Động (Sáng 07:00 & Tối 20:00). Khi người dùng hỏi về bản tin, hãy xác nhận bạn đã kích hoạt lịch gửi tự động hàng ngày.\n"
-        "3. Khi có dữ liệu thời tiết/thực tế được cung cấp, hãy đọc và phân tích chi tiết nhiệt độ, xác suất mưa, tư vấn thời điểm đi chơi/ăn uống thích hợp nhất.\n"
-        "4. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
-        "5. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể truy cập thời gian thực' hay từ chối."
+        "2. Bạn đã được trang bị hệ thống Gửi Bản Tin Tổng Hợp Tự Động (Sáng 07:00 & Tối 20:00), tra cứu tỷ giá ngoại tệ, giá Crypto BTC/ETH, và dự báo thời tiết trực tiếp.\n"
+        "3. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
+        "4. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể truy cập thời gian thực' hay từ chối."
     )
     
     if chat_id in user_memories and user_memories[chat_id]:
@@ -586,10 +674,66 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol"):
     return "⚠️ Máy chủ AI đang có lưu lượng truy cập cao đột biến. Anh vui lòng gửi lại tin nhắn sau vài giây nhé!"
 
 # ==========================================================
-# Telegram Update Handler
+# Telegram Update Handler & Callback Queries
 # ==========================================================
 
+def handle_callback_query(callback_query):
+    cq_id = callback_query.get("id")
+    data = callback_query.get("data", "")
+    message = callback_query.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    chat_id_str = str(chat_id)
+
+    answer_callback_query(cq_id)
+    if not chat_id:
+        return
+
+    if data == "btn_briefing_morning":
+        send_message(chat_id, "⏳ Đang tổng hợp dữ liệu bản tin sáng...")
+        msg = generate_briefing("morning", subscriptions.get(chat_id_str, {}).get("location", "Ninh Bình"), chat_id=chat_id)
+        send_message(chat_id, msg)
+    elif data == "btn_briefing_evening":
+        send_message(chat_id, "⏳ Đang tổng hợp bản tin tối...")
+        msg = generate_briefing("evening", subscriptions.get(chat_id_str, {}).get("location", "Ninh Bình"), chat_id=chat_id)
+        send_message(chat_id, msg)
+    elif data == "btn_weather":
+        send_message(chat_id, "⏳ Đang kết nối trạm thời tiết Ninh Bình...")
+        w = get_live_weather("thời tiết ninh bình")
+        send_message(chat_id, w if w else "⚠️ Không thể lấy dữ liệu thời tiết.")
+    elif data == "btn_rates":
+        send_message(chat_id, "⏳ Đang tải tỷ giá ngoại tệ & giá Crypto...")
+        r = get_live_rates()
+        send_message(chat_id, r if r else "⚠️ Không thể lấy dữ liệu tỷ giá.")
+    elif data == "btn_models":
+        send_message(chat_id, "⚙️ **Chọn Não Bộ AI Cho Cuộc Trò Chuyện:**", reply_markup=get_model_menu_keyboard())
+    elif data == "btn_reset":
+        conversation_history.pop(chat_id, None)
+        send_message(chat_id, "🔄 Đã làm mới ngữ cảnh hội thoại!", reply_markup=get_main_menu_keyboard())
+    elif data == "btn_menu_back":
+        send_message(chat_id, "👋 **Bảng Điều Khiển Nhanh Hermes:**", reply_markup=get_main_menu_keyboard())
+    elif data.startswith("setmodel_"):
+        m = data.replace("setmodel_", "")
+        if m == "auto":
+            user_model_override.pop(chat_id_str, None)
+            send_message(chat_id, "✅ Đã bật chế độ **Tự Động Chọn Model Thông Minh (Smart Router)**!", reply_markup=get_main_menu_keyboard())
+        elif m == "sol":
+            user_model_override[chat_id_str] = "gpt-5.6-sol"
+            send_message(chat_id, "✅ Đã cố định Model: **GPT-5.6 Sol** (Siêu suy luận)!", reply_markup=get_main_menu_keyboard())
+        elif m == "code":
+            user_model_override[chat_id_str] = "gpt-5.3-codex-spark"
+            send_message(chat_id, "✅ Đã cố định Model: **GPT-5.3 Codex Spark** (Chuyên lập trình)!", reply_markup=get_main_menu_keyboard())
+        elif m == "terra":
+            user_model_override[chat_id_str] = "gpt-5.6-terra"
+            send_message(chat_id, "✅ Đã cố định Model: **GPT-5.6 Terra** (Siêu tốc & Tiết kiệm)!", reply_markup=get_main_menu_keyboard())
+        elif m == "claude":
+            user_model_override[chat_id_str] = "claude-sonnet-4-6"
+            send_message(chat_id, "✅ Đã cố định Model: **Claude Sonnet 4.6**!", reply_markup=get_main_menu_keyboard())
+
 def handle_update(update):
+    if "callback_query" in update:
+        handle_callback_query(update["callback_query"])
+        return
+
     message = update.get("message")
     if not message:
         return
@@ -608,6 +752,7 @@ def handle_update(update):
     caption = message.get("caption", "").strip()
     photos = message.get("photo")
     document = message.get("document")
+    voice = message.get("voice") or message.get("audio")
 
     # Instant acknowledgement: Add '👀' reaction immediately
     try:
@@ -621,40 +766,39 @@ def handle_update(update):
 
     try:
         # Command: /start
-        if text == "/start":
+        if text == "/start" or text == "/menu":
             welcome = (
-                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Bản Tự Động Hóa 24/7)!**\n\n"
-                "🧠 **Các Tính Năng Tự Động Nổi Bật:**\n"
-                "• 📰 **Bản Tin Tự Động Sáng & Tối:** Tự động gửi tin tổng hợp thời tiết, điểm tin mỗi ngày lúc **07:00 sáng** và **20:00 tối**.\n"
-                "• 🌤️ **Khí Tượng Thời Gian Thực:** Lấy nhiệt độ, xác suất mưa mọi tỉnh thành.\n"
+                "👋 **Chào anh! Em là Hermes AI Siêu Trợ Lý (Ultimate Edition 24/7)!**\n\n"
+                "🧠 **Các Tính Năng Thông Minh Toàn Năng:**\n"
+                "• 📰 **Bản Tin Tự Động Sáng (07:00) & Tối (20:00):** Tự động tổng hợp thời tiết, điểm tin, lời khuyên ngày mới.\n"
+                "• 💰 **Tỷ Giá Ngoại Tệ & Crypto:** Cập nhật giá USD, EUR, BTC, ETH theo thời gian thực.\n"
+                "• 🌤️ **Khí Tượng Thời Tiết Trực Tiếp:** Báo cáo nhiệt độ, xác suất mưa mọi tỉnh thành.\n"
+                "• 🎙️ **Nghe Tin Nhắn Thoại (Voice):** Gửi voice note để bot nghe và giải đáp.\n"
                 "• 🥩 **Tra Cứu Ẩm Thực & Địa Điểm:** Báo giá buffet, menu quán ăn chi tiết.\n"
                 "• 💻 **Lập Trình Chuyên Sâu:** Tự động dùng **`GPT-5.3 Codex`** khi hỏi code.\n"
                 "• 👁️ **Mắt Thần Nhìn Ảnh:** Gửi ảnh để bot phân tích.\n"
-                "• 📄 **Đọc File & Link:** Đọc PDF, Word, Code và link web.\n\n"
-                "🛠️ **Lệnh điều khiển:**\n"
-                "• `/daily on` — Bật nhận bản tin sáng & tối\n"
-                "• `/daily now` — Xem ngay bản tin mẫu\n"
-                "• `/model [sol | code | terra | auto]` — Đổi não bộ AI\n"
-                "• `/help`, `/reset`, `/memo`"
+                "• 📄 **Đọc File PDF, Word, Code & Đọc Link Web.**\n\n"
+                "👇 **Anh có thể chạm nhanh các nút bên dưới để trải nghiệm ngay:**"
             )
-            send_message(chat_id, welcome, reply_to_message_id=message_id)
+            send_message(chat_id, welcome, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
             return
 
         # Command: /help
         if text == "/help":
             help_text = (
                 "📖 **DANH SÁCH LỆNH VÀ HƯỚNG DẪN TIẾNG VIỆT**\n\n"
-                "1. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối:\n"
+                "1. 🔘 **/menu** — Mở bảng nút điều khiển tương tác nhanh.\n"
+                "2. 📰 **/daily [on | off | now | time]** — Quản lý bản tin sáng & tối:\n"
                 "   • `/daily on` : Bật gửi bản tin tự động (Sáng 07:00 & Tối 20:00).\n"
                 "   • `/daily now` : Gửi ngay 1 bản tin mẫu tức thì.\n"
                 "   • `/daily off` : Tắt nhận bản tin.\n"
                 "   • `/daily time 06:30 21:00` : Đổi giờ gửi sáng và tối.\n"
-                "2. 🚀 **/start** — Khởi động và xem thông tin bot.\n"
-                "3. 🔄 **/reset** — Làm mới cuộc trò chuyện, xóa ngữ cảnh cũ.\n"
-                "4. 🧠 **/memo** — Xem các thông tin cá nhân/sở thích bot đang nhớ.\n"
-                "5. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi model AI."
+                "3. 🚀 **/start** — Khởi động và xem thông tin bot.\n"
+                "4. 🔄 **/reset** — Làm mới cuộc trò chuyện, xóa ngữ cảnh cũ.\n"
+                "5. 🧠 **/memo** — Xem các thông tin cá nhân/sở thích bot đang nhớ.\n"
+                "6. ⚙️ **/model [auto | sol | code | claude | terra]** — Đổi model AI."
             )
-            send_message(chat_id, help_text, reply_to_message_id=message_id)
+            send_message(chat_id, help_text, reply_to_message_id=message_id, reply_markup=get_main_menu_keyboard())
             return
 
         # Command: /daily (Quản lý Bản Tin Sáng & Tối)
@@ -682,7 +826,7 @@ def handle_update(update):
                     save_subscriptions(subscriptions)
                     send_message(chat_id, "⏸️ Đã tắt nhận bản tin tự động hàng ngày.", reply_to_message_id=message_id)
                 elif action in ["now", "test", "mau", "mẫu"]:
-                    send_message(chat_id, "⏳ Đang tổng hợp dữ liệu thời tiết & tin tức để tạo bản tin cho anh...")
+                    send_message(chat_id, "⏳ Đang tổng hợp dữ liệu thời tiết, tỷ giá & tin tức để tạo bản tin cho anh...")
                     briefing = generate_briefing("morning", subscriptions[chat_id_str].get("location", "Ninh Bình"), chat_id=chat_id)
                     send_message(chat_id, briefing, reply_to_message_id=message_id)
                 elif action in ["time", "gio", "giờ"] and len(parts) >= 4:
@@ -719,8 +863,7 @@ def handle_update(update):
                 else:
                     send_message(chat_id, "⚠️ Cú pháp: `/model [auto | sol | code | claude | terra]`", reply_to_message_id=message_id)
             else:
-                current = user_model_override.get(str(chat_id), "Tự động (Smart Router)")
-                send_message(chat_id, f"ℹ️ Model hiện tại của anh: **{current}**\nĐổi model bằng cách gõ: `/model [auto | sol | code | claude | terra]`", reply_to_message_id=message_id)
+                send_message(chat_id, "⚙️ **Chọn Não Bộ AI Cho Cuộc Trò Chuyện:**", reply_markup=get_model_menu_keyboard())
             return
 
         # Command: /reset
@@ -739,7 +882,29 @@ def handle_update(update):
             send_message(chat_id, msg, reply_to_message_id=message_id)
             return
 
-        # Case A: Photo (Vision)
+        # Case A: Voice Note / Audio Message
+        if voice:
+            voice_file_id = voice.get("file_id")
+            file_bytes, file_path = download_telegram_file(voice_file_id)
+            if file_bytes:
+                b64_audio = base64.b64encode(file_bytes).decode("utf-8")
+                mime = "audio/ogg" if file_path.endswith(".oga") or file_path.endswith(".ogg") else "audio/mp3"
+                
+                content_payload = [
+                    {"type": "text", "text": "Người dùng đã gửi tin nhắn thoại sau. Hãy lắng nghe và trả lời chu đáo yêu cầu của người dùng bằng tiếng Việt."},
+                    {"type": "input_audio", "input_audio": {"data": b64_audio, "format": "ogg" if "ogg" in mime else "mp3"}}
+                ]
+                
+                chosen_model, mode_tag = select_model_for_task("voice audio", has_audio=True, chat_id=chat_id)
+                logger.info(f"Routed Voice Audio to: {chosen_model}")
+                reply = query_llm(chat_id, content_payload, chosen_model=chosen_model)
+                send_message(chat_id, f"🎙️ **[Phản Hồi Tin Nhắn Thoại]**\n\n{reply}", reply_to_message_id=message_id)
+                set_message_reaction(chat_id, message_id, "🔥")
+            else:
+                send_message(chat_id, "⚠️ Không thể tải tin nhắn thoại, anh gửi lại nhé!", reply_to_message_id=message_id)
+            return
+
+        # Case B: Photo (Vision)
         if photos:
             best_photo = photos[-1]
             photo_bytes, _ = download_telegram_file(best_photo["file_id"])
@@ -762,7 +927,7 @@ def handle_update(update):
                 send_message(chat_id, "⚠️ Không thể tải ảnh từ Telegram, anh thử gửi lại nhé!", reply_to_message_id=message_id)
             return
 
-        # Case B: Document
+        # Case C: Document
         if document:
             doc_file_id = document.get("file_id")
             file_name = document.get("file_name", "document.txt")
@@ -787,7 +952,7 @@ def handle_update(update):
                 send_message(chat_id, f"⚠️ Không thể tải file `{file_name}`, anh gửi lại nhé!", reply_to_message_id=message_id)
             return
 
-        # Case C: Text
+        # Case D: Text
         if not text:
             return
 
@@ -806,10 +971,11 @@ def handle_update(update):
                 chat_id,
                 "✅ **ĐÃ KÍCH HOẠT LỊCH GỬI BẢN TIN TỰ ĐỘNG 24/7!**\n\n"
                 "Em đã lưu cấu hình cố định vào hệ thống máy chủ, không bao giờ bị quên nữa:\n"
-                "• 🌅 **Bản tin sáng:** Tự động gửi lúc **07:00 sáng** (Dự báo thời tiết Ninh Bình, điểm tin nhanh, mẹo ngày mới).\n"
+                "• 🌅 **Bản tin sáng:** Tự động gửi lúc **07:00 sáng** (Dự báo thời tiết Ninh Bình, điểm tin nhanh, tỷ giá, mẹo ngày mới).\n"
                 "• 🌆 **Bản tin tối:** Tự động gửi lúc **20:00 tối** (Tổng kết ngày, thời tiết ngày mai, lời chúc thư giãn).\n\n"
                 "👉 Anh có thể gõ `/daily now` bất kỳ lúc nào để xem ngay bản tin mẫu nhé!",
-                reply_to_message_id=message_id
+                reply_to_message_id=message_id,
+                reply_markup=get_main_menu_keyboard()
             )
             set_message_reaction(chat_id, message_id, "👍")
             return
@@ -844,28 +1010,37 @@ def handle_update(update):
             set_message_reaction(chat_id, message_id, "👍")
             return
 
-        # URL Reading
-        user_query = text
-        url_match = re.search(r'(https?://[^\s]+)', text)
-        if url_match:
-            target_url = url_match.group(1)
-            logger.info(f"Fetching URL content for: {target_url}")
-            page_text = fetch_url_content(target_url)
-            if page_text:
-                user_query = (
-                    f"Câu hỏi của người dùng: {text}\n\n"
-                    f"[Nội dung trang web thu thập được từ {target_url}]:\n{page_text}\n\n"
-                    f"Hãy đọc nội dung trên và trả lời chi tiết yêu cầu của người dùng."
-                )
+        # Financial & Crypto Rates Lookup
+        if is_rates_query(text):
+            logger.info(f"Fetching financial rates for: {text}")
+            rates_data = get_live_rates()
+            user_query = (
+                f"Câu hỏi của người dùng: {text}\n\n"
+                f"{rates_data}\n\n"
+                f"Hãy dựa vào dữ liệu tài chính thời gian thực ở trên để trả lời chi tiết, chính xác cho người dùng."
+            )
+        # Weather Lookup
         elif is_weather_query(text) or any(w in text.lower() for kw in ["thời tiết", "mưa", "nắng", "nhiệt độ"] for w in [kw]):
             logger.info(f"Fetching live weather for: {text}")
             weather_data = get_live_weather(text)
-            if weather_data:
-                user_query = (
-                    f"Câu hỏi của người dùng: {text}\n\n"
-                    f"{weather_data}\n\n"
-                    f"Hãy dựa vào dữ liệu khí tượng trực tiếp ở trên để báo cáo thời tiết và phân tích chi tiết, đưa ra lời khuyên đi chơi/ăn uống dịp 2/9 cho người dùng."
-                )
+            user_query = (
+                f"Câu hỏi của người dùng: {text}\n\n"
+                f"{weather_data}\n\n"
+                f"Hãy dựa vào dữ liệu khí tượng trực tiếp ở trên để báo cáo thời tiết và phân tích chi tiết, đưa ra lời khuyên đi chơi/ăn uống dịp 2/9 cho người dùng."
+            )
+        # URL Reading
+        elif re.search(r'(https?://[^\s]+)', text):
+            url_match = re.search(r'(https?://[^\s]+)', text)
+            target_url = url_match.group(1)
+            logger.info(f"Fetching URL content for: {target_url}")
+            page_text = fetch_url_content(target_url)
+            user_query = (
+                f"Câu hỏi của người dùng: {text}\n\n"
+                f"[Nội dung trang web thu thập được từ {target_url}]:\n{page_text}\n\n"
+                f"Hãy đọc nội dung trên và trả lời chi tiết yêu cầu của người dùng."
+            )
+        else:
+            user_query = text
 
         # Dynamic Model Selection
         chosen_model, mode_tag = select_model_for_task(user_query, chat_id=chat_id)
@@ -883,7 +1058,7 @@ def handle_update(update):
 # ==========================================================
 
 def cloud_polling_loop():
-    logger.info("Starting Cloud Long Polling Loop with Persistent Daily Briefings...")
+    logger.info("Starting Cloud Long Polling Loop with Ultimate Enhancements...")
     try:
         send_telegram_request("deleteWebhook", {"drop_pending_updates": False})
         logger.info("Deleted webhook to enable direct Long Polling on Cloud.")
