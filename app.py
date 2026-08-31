@@ -528,6 +528,80 @@ def generate_ai_image(prompt_text):
         logger.error(f"Image generation error: {e}")
     return None, enhanced
 
+def parse_image_intent(text):
+    text_clean = text.strip()
+    text_lower = text_clean.lower()
+    
+    # 1. Capability / Meta question: e.g. "Tạo ảnh cho anh được không. Em sẽ viết prompt..."
+    meta_patterns = [
+        r'^(?:tạo|vẽ)\s+(?:ảnh|hình|tranh)\s+(?:cho\s+(?:anh|tôi|em|mình)\s+)?(?:được|đc)\s*(?:không|ko|hả|chưa)',
+        r'^(?:em|bot|bạn)\s+(?:có\s+)?(?:tạo|vẽ|làm)\s+(?:được|đc)\s+(?:ảnh|hình|tranh)',
+        r'^(?:có\s+)?(?:tạo|vẽ)\s+(?:ảnh|hình|tranh)\s+(?:như\s+thế\s+nào|ra\s+sao|thế\s+nào|được\s+không|đc\s+ko)',
+    ]
+    for mp in meta_patterns:
+        if re.search(mp, text_lower):
+            if not any(kw in text_lower for kw in ["mèo", "chó", "người", "xe", "nhà", "gái", "trai", "rồng", "hoa", "cảnh", "núi", "biển", "rừng", "thành phố", "robot", "anime", "cyberpunk", "tường"]):
+                return {"type": "meta_question"}
+
+    # 2. Command syntax: /draw, /image, /img, /ve, /taoanh
+    cmd_match = re.search(r'^/(?:draw|image|img|ve|taoanh)\s*(.+)', text_clean, re.IGNORECASE)
+    if cmd_match:
+        p = cmd_match.group(1).strip().strip('"\'')
+        if len(p) > 2:
+            return {"type": "draw", "prompt": p}
+
+    # 3. Natural generation requests:
+    pats = [
+        r'(?:anh|tôi|em|mình|bạn)?\s*(?:muốn|cần|xin|hãy|hộ|giúp)?\s*(?:tạo|vẽ|gen|generate|làm|render|chụp)?\s*(?:cho\s+(?:anh|tôi|em|mình)\s+)?(?:1|một)?\s*(?:bức\s+ảnh|tấm\s+ảnh|hình\s+ảnh|bức\s+hình|tấm\s+hình|bức\s+tranh|tấm\s+tranh|ảnh|hình|tranh|photo)\s*(?:4k|8k|hd|siêu\s+sắc\s+n[eé]t|chân\s+thực|realistic|anime|3d|cinematic|nghệ\s+thuật|sơn\s+dầu)?\s*(?:với\s+loại\s+ảnh\s+chân\s+thực)?\s*(?:về|của|hình)?\s*(.+)',
+        r'(?:vẽ|tạo\s+ảnh|vẽ\s+ảnh|tạo\s+hình|vẽ\s+hình|gen\s+ảnh|chụp\s+ảnh\s+ai)\s+(?:cho\s+(?:anh|tôi|em|mình)\s+)?(?:1|một)?\s*(?:bức|tấm)?\s*(.+)',
+        r'(?:cho\s+(?:anh|tôi|em|mình)\s+)(?:xin\s+)?(?:1|một)?\s*(?:bức\s+ảnh|tấm\s+ảnh|hình\s+ảnh|bức\s+hình|tấm\s+hình|ảnh|hình|tranh)\s*(.+)'
+    ]
+    for p_pat in pats:
+        m = re.search(p_pat, text_clean, re.IGNORECASE)
+        if m:
+            extracted = m.group(1).strip().strip('.,!?')
+            extracted = re.sub(r'\s+(?:được\s+không|được\s+ko|nhé|nha|nhen|đi|giúp\s+anh|hộ\s+anh)$', '', extracted, flags=re.IGNORECASE).strip()
+            if len(extracted) >= 3 and not extracted.lower() in ["được không", "đc ko", "cho anh", "thế nào"]:
+                return {"type": "draw", "prompt": extracted}
+
+    return None
+
+def extract_tool_call_from_llm(llm_output, original_user_text=""):
+    # 1. Explicit tool tag
+    m_tag = re.search(r'\[(?:TOOL_DRAW|DRAW|VẼ_ẢNH|TẠO_ẢNH):\s*([^\]]+)\]', llm_output, re.IGNORECASE)
+    if m_tag:
+        return {"tool": "draw", "prompt": m_tag.group(1).strip()}
+        
+    # 2. Command in LLM text
+    m_cmd = re.search(r'/(?:draw|image)\s+["\']?([^"\'\n]+)["\']?', llm_output, re.IGNORECASE)
+    if m_cmd:
+        return {"tool": "draw", "prompt": m_cmd.group(1).strip()}
+
+    # 3. Catch hallucinated promises
+    hallucination_patterns = [
+        r'(?:tôi|mình|em|bot)\s+sẽ\s+(?:tạo|vẽ|làm)\s+(?:cho\s+(?:bạn|anh)\s+)?(?:ngay\s+)?(?:một\s+)?(?:bức\s+ảnh|tấm\s+ảnh|hình\s+ảnh|ảnh)',
+        r'(?:bức\s+ảnh|hình\s+ảnh)\s+.*đang\s+được\s+(?:tạo|vẽ)',
+    ]
+    for hp in hallucination_patterns:
+        if re.search(hp, llm_output, re.IGNORECASE):
+            p_clean = re.sub(r'^(?:anh|tôi|em)?\s*(?:muốn|cần|xin|hãy|hộ|giúp)?\s*(?:tạo|vẽ|làm)?\s*(?:cho\s+(?:anh|tôi|em)\s+)?(?:1|một)?\s*(?:bức\s+ảnh|tấm\s+ảnh|hình\s+ảnh|ảnh)\s*', '', original_user_text, flags=re.IGNORECASE).strip()
+            if len(p_clean) > 3:
+                return {"tool": "draw", "prompt": p_clean}
+
+    return None
+
+def execute_draw_and_send(chat_id, prompt_input, message_id=None):
+    send_message(chat_id, f"🎨 Đang phác thảo và vẽ bức ảnh: *\"{prompt_input}\"* bằng Model Flux.1...", reply_to_message_id=message_id)
+    img_bytes, enhanced_p = generate_ai_image(prompt_input)
+    if img_bytes:
+        caption = f"✨ **Tác phẩm tạo bởi Hermes AI (Flux.1)**\n\n📌 **Ý tưởng:** _{prompt_input}_\n🎨 **Prompt chi tiết:** `{enhanced_p[:250]}...`"
+        send_photo(chat_id, img_bytes, caption=caption, reply_to_message_id=message_id)
+        set_message_reaction(chat_id, message_id, "🔥")
+        return True
+    else:
+        send_message(chat_id, "⚠️ Không thể kết nối máy chủ vẽ ảnh lúc này, anh thử lại sau vài giây nhé!", reply_to_message_id=message_id)
+        return False
+
 def generate_tts_audio(text):
     clean = re.sub(r'[*_`#~]', '', text)[:300]
     encoded = urllib.parse.quote(clean)
@@ -923,8 +997,9 @@ def query_llm(chat_id, user_content, chosen_model="gpt-5.6-sol", matched_skills=
         "1. Luôn trực tiếp trả lời, giải đáp cặn kẽ và giải quyết yêu cầu của người dùng, không bao giờ bảo người dùng tự tìm.\n"
         "2. Bạn sở hữu Hệ Thống Kỹ Năng Tự Học (Skills Engine), Bộ Nhớ Dài Hạn (Persistent Memory), Sổ Quản Lý Thu Chi Cá Nhân (Expense Tracker) và Quản lý Nhiệm Vụ (To-Do List).\n"
         "3. Bạn có đủ các công cụ: Sổ Thu Chi (`/chitieu`), Tóm Tắt Bài Báo (`/summary`), Soạn Email/Văn Bản (`/soan`), Điểm Báo Tin Tức (`/news`), Chạy Code Python (`/run`), Tạo Ảnh AI Flux (`/draw`), Đọc Giọng Nói TTS (`/tts`), Tạo Mã QR (`/qr`), Chụp Web (`/capture`), Bản Tin Tự Động (`/daily`), Thời Tiết, Lịch Âm Dương (`/amlich`).\n"
-        "4. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
-        "5. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể tạo ảnh' hay từ chối."
+        "4. BẠN CÓ TÍNH NĂNG TẠO ẢNH TRỰC TIẾP QUA FLUX.1. Khi người dùng muốn tạo ảnh, vẽ tranh hoặc yêu cầu hình ảnh, BẮT BUỘC TRẢ VỀ CÚ PHÁP: `[TOOL_DRAW: <mô tả chi tiết bức ảnh>]`. TUYỆT ĐỐI KHÔNG HỨA SUÔNG 'Hãy chờ một chút', TUYỆT ĐỐI KHÔNG TỪ CHỐI BẢO DÙNG MIDJOURNEY/DALLE.\n"
+        "5. Khi người dùng hỏi về địa điểm/quán ăn (ví dụ BBQ 1988), cung cấp đầy đủ thông tin: địa chỉ các cơ sở tại Ninh Bình (15 Lê Thánh Tông & 38 Đào Duy Từ), bảng giá vé buffet nướng lẩu, các món đặc sắc, hotline đặt bàn và giờ mở cửa.\n"
+        "6. Tuyệt đối KHÔNG BAO GIỜ nói 'tôi không có công cụ duyệt web', 'không thể tạo ảnh' hay từ chối."
     )
     
     if chat_id_str in user_memories and user_memories[chat_id_str]:
@@ -1513,19 +1588,24 @@ def handle_update(update):
             send_message(chat_id, msg, reply_to_message_id=message_id)
             return
 
-        # Command: /draw or /image (Tạo ảnh AI Flux)
-        draw_match = re.search(r'^(?:/draw|/image|vẽ\s+ảnh|tạo\s+ảnh|vẽ\s+hình|hãy\s+vẽ)\s*(.+)', text, re.IGNORECASE)
-        if draw_match:
-            prompt_input = draw_match.group(1).strip()
-            send_message(chat_id, f"🎨 Đang phác thảo và vẽ bức ảnh: *\"{prompt_input}\"* bằng Model Flux.1...")
-            img_bytes, enhanced_p = generate_ai_image(prompt_input)
-            if img_bytes:
-                caption = f"✨ **Tác phẩm tạo bởi Hermes AI (Flux.1)**\n\n📌 **Prompt:** _{prompt_input}_\n🎨 **Chi tiết:** `{enhanced_p[:200]}...`"
-                send_photo(chat_id, img_bytes, caption=caption, reply_to_message_id=message_id)
-                set_message_reaction(chat_id, message_id, "🔥")
-            else:
-                send_message(chat_id, "⚠️ Không thể kết nối máy chủ vẽ ảnh lúc này, anh thử lại sau vài giây nhé!", reply_to_message_id=message_id)
-            return
+        # Natural & Command Image Generation Intent Detection
+        img_intent = parse_image_intent(text)
+        if img_intent:
+            if img_intent["type"] == "meta_question":
+                meta_reply = (
+                    "🎨 **Dạ em có thể tạo ảnh AI cực kỳ đẹp và sắc nét luôn anh nhé!**\n\n"
+                    "Em sử dụng model vẽ ảnh Flux.1 chất lượng 4K/8K. Anh chỉ cần miêu tả bất kỳ ý tưởng nào bằng tiếng Việt tự nhiên (Ví dụ:\n"
+                    "• *'Anh muốn 1 bức ảnh 4k chân thực 1 con mèo màu đen đang nằm trên bức tường'*\n"
+                    "• *'Vẽ cho anh chú rồng vàng bay qua mây lúc bình minh'*\n"
+                    "• *'Tạo ảnh chiếc xe thể thao cổ điển dưới mưa ban đêm'*)\n\n"
+                    "Em sẽ tự động viết prompt tiếng Anh chi tiết, kích hoạt bộ vẽ và gửi ảnh hoàn chỉnh ngay cho anh ạ!"
+                )
+                send_message(chat_id, meta_reply, reply_to_message_id=message_id)
+                set_message_reaction(chat_id, message_id, "👍")
+                return
+            elif img_intent["type"] == "draw":
+                execute_draw_and_send(chat_id, img_intent["prompt"], message_id=message_id)
+                return
 
         # Command: /tts or /speak (Text-to-Speech Voice Generator)
         tts_match = re.search(r'^(?:/tts|/speak|đọc\s+cho\s+tôi|phát\s+âm|nói\s+câu)\s*(.+)', text, re.IGNORECASE)
@@ -1795,7 +1875,18 @@ def handle_update(update):
         logger.info(f"Dynamic Router selected: {chosen_model} ({mode_tag}) for text: {text[:50]}")
         
         reply = query_llm(chat_id, user_query, chosen_model=chosen_model, matched_skills=matched_skills)
-        send_message(chat_id, reply, reply_to_message_id=message_id)
+        
+        # Autonomous tool interception from LLM output
+        tool_call = extract_tool_call_from_llm(reply, user_query)
+        if tool_call and tool_call.get("tool") == "draw":
+            logger.info(f"Intercepted Draw Tool Call from LLM: {tool_call['prompt']}")
+            execute_draw_and_send(chat_id, tool_call["prompt"], message_id=message_id)
+            return
+
+        clean_reply = re.sub(r'\[(?:TOOL_DRAW|DRAW|VẼ_ẢNH|TẠO_ẢNH):[^\]]+\]', '', reply).strip()
+        if not clean_reply:
+            clean_reply = reply
+        send_message(chat_id, clean_reply, reply_to_message_id=message_id)
         set_message_reaction(chat_id, message_id, "🔥")
 
     finally:
