@@ -642,40 +642,55 @@ def capture_web_screenshot(url):
 # Autonomous Daily Briefing Generators
 # ==========================================================
 
+def fetch_live_tech_headlines():
+    urls = [
+        "https://vnexpress.net/rss/so-hoa.rss",
+        "https://thanhnien.vn/rss/cong-nghe.rss",
+        "https://vietnamnet.vn/rss/cong-nghe.rss"
+    ]
+    raw_news = []
+    for u in urls:
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                tree = ET.fromstring(r.read())
+                for item in tree.findall(".//item")[:4]:
+                    title = item.find("title").text if item.find("title") is not None else ""
+                    link = item.find("link").text if item.find("link") is not None else ""
+                    desc = item.find("description").text if item.find("description") is not None else ""
+                    desc = re.sub(r'<[^>]+>', '', desc).replace("]]>", "").replace("<![CDATA[", "").strip()
+                    if title:
+                        raw_news.append(f"• {title}: {desc}")
+        except Exception as e:
+            logger.warning(f"Error fetching tech feed {u}: {e}")
+    return "\n".join(raw_news[:8]) if raw_news else "Các cập nhật công nghệ và AI toàn cầu mới nhất."
+
 def generate_briefing(briefing_type="morning", location="Ninh Bình", chat_id=None):
     now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
-    time_str = now_vn.strftime("%A, ngày %d/%m/%Y")
+    date_str = now_vn.strftime("%A, ngày %d/%m/%Y")
     weather_info = get_live_weather(location)
+    tech_headlines = fetch_live_tech_headlines()
     
-    mem_info = ""
-    chat_id_str = str(chat_id)
-    if chat_id_str in user_memories and user_memories[chat_id_str]:
-        mem_info = "\nThông tin trí nhớ cá nhân của người dùng:\n" + "\n".join([f"- {m}" for m in user_memories[chat_id_str]])
-        
-    if briefing_type == "morning":
-        prompt = (
-            f"Bạn là Hermes - Siêu Trợ Lý AI cao cấp.\n"
-            f"Hãy soạn một **BẢN TIN TỔNG HỢP BUỔI SÁNG** ({time_str}) thật chuyên nghiệp, năng lượng và tinh tế cho người dùng tại {location}.\n"
-            f"Dữ liệu thời tiết thực tế:\n{weather_info}\n{mem_info}\n\n"
-            "Cấu trúc bản tin gồm:\n"
-            "1. 🌅 **Lời chào buổi sáng & Ngày tháng**\n"
-            "2. 🌤️ **Dự báo Thời Tiết Trong Ngày** (Nhiệt độ, xác suất mưa, lời khuyên trang phục/hoạt động)\n"
-            "3. 📰 **Điểm Tin Nhanh & Xu Hướng Trong Ngày** (Công nghệ AI, đời sống số, mẹo năng suất)\n"
-            "4. 💡 **Lời chúc ngày mới & Câu nói truyền cảm hứng**\n"
-            "Trình bày chuẩn Markdown, icon sinh động, bố cục thoáng đẹp mắt trên Telegram."
-        )
-    else:
-        prompt = (
-            f"Bạn là Hermes - Siêu Trợ Lý AI cao cấp.\n"
-            f"Hãy soạn một **BẢN TIN TỔNG KẾT BUỔI TỐI** ({time_str}) thật ấm áp, thư giãn và hữu ích cho người dùng tại {location}.\n"
-            f"Dữ liệu thời tiết:\n{weather_info}\n{mem_info}\n\n"
-            "Cấu trúc bản tin gồm:\n"
-            "1. 🌆 **Lời chào buổi tối & Lời chúc thư giãn sau một ngày làm việc**\n"
-            "2. 🌙 **Dự Báo Thời Tiết & Lưu Ý Cho Ngày Mai**\n"
-            "3. 📌 **Góc Nhìn & Ý Tưởng Tích Cực Trước Khi Nghỉ Ngơi**\n"
-            "4. 🛌 **Lời chúc ngủ ngon & Nạp lại năng lượng**\n"
-            "Trình bày chuẩn Markdown, icon ấm áp, bố cục dễ đọc."
-        )
+    prompt = (
+        f"Bạn là Hermes - Siêu Trợ Lý Chuyên Gia Công Nghệ & AI cao cấp.\n"
+        f"Hãy biên soạn một **BÁO CÁO TỔNG HỢP CÔNG NGHỆ & ĐỘT PHÁ AI [{briefing_type.upper()}] - {date_str}** với hàm lượng thông tin kỹ thuật cao, sâu sắc và thực tế cho anh Hiếu (Lập trình viên / AI Developer tại {location}).\n\n"
+        f"Dữ liệu tin tức công nghệ thực tế thu thập hôm nay:\n{tech_headlines}\n\n"
+        f"Dữ liệu thời tiết tại {location}:\n{weather_info}\n\n"
+        "YÊU CẦU BỐ CỤC CHUẨN MARKDOWN TELEGRAM:\n"
+        f"# 🤖 BẢN TIN TỔNG HỢP CÔNG NGHỆ & ĐỘT PHÁ AI ({'BUỔI SÁNG' if briefing_type == 'morning' else 'BUỔI TỐI'})\n"
+        f"📅 *Cập nhật: {date_str}*\n\n"
+        "## ⚡ 1. Đột Phá AI & Mô Hình Mới (Frontier Models & Agents)\n"
+        "- Phân tích mô hình AI mới, Reasoning Models, AI Agents tự hành, tin tức từ OpenAI, Google Gemini, Anthropic Claude, Meta LLaMA, DeepSeek.\n\n"
+        "## 💻 2. Phần Cứng, Chip Bán Dẫn & GPU AI (Hardware & Tech)\n"
+        "- Điểm tin NVIDIA, chip bán dẫn, vi xử lý, GPU máy chủ và công nghệ phần cứng máy tính mới.\n\n"
+        "## 🛠️ 3. Công Cụ Lập Trình & Open-source Nổi Bật\n"
+        "- Gợi ý 2 framework / công cụ mã nguồn mở hữu ích cho developer.\n\n"
+        "## 📱 4. Điểm Tin Công Nghệ & An Ninh Mạng Việt Nam\n"
+        "- Tóm tắt nhanh tin tức công nghệ số, an toàn mạng trong nước.\n\n"
+        f"## 🌤️ 5. Thời Tiết Tại {location}\n"
+        "- Tóm tắt ngắn gọn nhiệt độ và lưu ý thời tiết trong ngày.\n\n"
+        "Trình bày chuyên nghiệp, icon sinh động, gạch đầu dòng rõ ràng, phân tích sắc bén, tuyệt đối không viết văn sáo rỗng."
+    )
         
     messages = [{"role": "user", "content": prompt}]
     reply = query_llm_resilient(chat_id, messages, chosen_model="gpt-5.6-sol")
@@ -795,8 +810,8 @@ def get_main_menu_keyboard():
     return {
         "inline_keyboard": [
             [
-                {"text": "🌅 Bản Tin Sáng", "callback_data": "btn_briefing_morning"},
-                {"text": "🌆 Bản Tin Tối", "callback_data": "btn_briefing_evening"}
+                {"text": "🤖 Điểm Tin AI & Tech Sáng", "callback_data": "btn_briefing_morning"},
+                {"text": "🌃 Tổng Hợp AI & Tech Tối", "callback_data": "btn_briefing_evening"}
             ],
             [
                 {"text": "💵 Sổ Thu Chi Cá Nhân", "callback_data": "btn_expenses"},
@@ -966,7 +981,7 @@ def query_llm_resilient(chat_id, messages_list, chosen_model="gpt-5.6-sol"):
                 "temperature": 0.7
             }
             if "openrouter" in c["base_url"]:
-                payload["max_tokens"] = 2500
+                payload["max_tokens"] = 1500
 
             r = requests.post(url, headers=headers, json=payload, timeout=c["timeout"])
             if r.status_code == 200:
@@ -1391,6 +1406,14 @@ def handle_update(update):
         if text in ["/chitieu", "/sothuchi", "/thuchi", "sổ thu chi", "xem chi tiêu"]:
             send_message(chat_id, get_expense_report(chat_id_str), reply_to_message_id=message_id)
             set_message_reaction(chat_id, message_id, "👍")
+            return
+
+        # Command: /ainews, /tech, /diemtin (Báo cáo tổng hợp Công nghệ & Đột phá AI)
+        if text.startswith("/ainews") or text.startswith("/tech") or text.startswith("/diemtin") or text in ["tin ai", "tin công nghệ", "bản tin công nghệ"]:
+            send_message(chat_id, "⏳ Đang tổng hợp dữ liệu tin tức công nghệ, phần cứng và đột phá AI mới nhất...")
+            report = generate_briefing("morning", subscriptions.get(chat_id_str, {}).get("location", "Ninh Bình"), chat_id=chat_id)
+            send_message(chat_id, report, reply_to_message_id=message_id)
+            set_message_reaction(chat_id, message_id, "🔥")
             return
 
         # Command: /summary or /tomtat [link]
