@@ -281,8 +281,21 @@ def synology_backup_relay():
         sid = login_json["data"]["sid"]
         cookie_header = resp.headers.get("Set-Cookie", f"id={sid}")
 
-        # 2. Upload file to /Kĩ Thuật/backup_km_kithuat
-        target_path = "/Kĩ Thuật/backup_km_kithuat"
+        # 2. Định danh thư mục riêng cho từng nhân viên (/Kĩ Thuật/backup_km_kithuat/{Employee_Folder})
+        def get_employee_folder_slug(name_str):
+            if not name_str:
+                return "Nguyen_Trung_Hieu"
+            import unicodedata
+            norm = unicodedata.normalize("NFD", name_str)
+            norm = "".join(c for c in norm if unicodedata.category(c) != "Mn")
+            norm = norm.replace("đ", "d").replace("Đ", "D")
+            w_list = [w.capitalize() for w in re.split(r"[\s_-]+", norm) if w]
+            return "_".join(w_list) or "KTV"
+
+        emp_raw = settings.get("employeeName") or (payload_content.get("metadata", {}) if isinstance(payload_content, dict) else {}).get("employeeName") or "NGUYỄN TRUNG HIẾU"
+        emp_folder = get_employee_folder_slug(emp_raw)
+        target_path = f"/Kĩ Thuật/backup_km_kithuat/{emp_folder}"
+        
         json_bytes = json.dumps(payload_content, ensure_ascii=False, indent=2).encode("utf-8")
 
         boundary = "----WebKitFormBoundary" + str(int(time.time() * 1000))
@@ -342,6 +355,109 @@ def synology_backup_relay():
 
     except Exception as e:
         logger.error(f"Synology Relay Error: {e}")
+        r = jsonify({"success": False, "error": str(e)})
+        r.headers["Access-Control-Allow-Origin"] = "*"
+        return r, 500
+
+@app.route("/api/synology-restore", methods=["POST", "OPTIONS"])
+def synology_restore_relay():
+    # CORS Preflight
+    if request.method == "OPTIONS":
+        resp = Response()
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        return resp, 204
+
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        settings = data.get("settings", {})
+        
+        def get_employee_folder_slug(name_str):
+            if not name_str:
+                return "Nguyen_Trung_Hieu"
+            import unicodedata
+            norm = unicodedata.normalize("NFD", name_str)
+            norm = "".join(c for c in norm if unicodedata.category(c) != "Mn")
+            norm = norm.replace("đ", "d").replace("Đ", "D")
+            w_list = [w.capitalize() for w in re.split(r"[\s_-]+", norm) if w]
+            return "_".join(w_list) or "KTV"
+
+        emp_raw = settings.get("employeeName") or data.get("employeeName") or "NGUYỄN TRUNG HIẾU"
+        emp_folder = get_employee_folder_slug(emp_raw)
+
+        user = settings.get("synologyUsername") or "kt"
+        password = settings.get("synologyPassword") or "Abcd1234"
+        raw_host = settings.get("synologyNasHost") or "mtnguyenthanh.synology.me"
+        clean_host = raw_host.replace("https://", "").replace("http://", "").strip("/")
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        # 1. Login to Synology DSM
+        login_url = f"https://{clean_host}:5001/webapi/auth.cgi?api=SYNO.API.Auth&version=3&method=login&account={urllib.parse.quote(user)}&passwd={urllib.parse.quote(password)}&session=FileStation&format=cookie"
+        req = urllib.request.Request(login_url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, context=ctx, timeout=8)
+        login_json = json.loads(resp.read().decode("utf-8"))
+
+        if not login_json.get("success"):
+            r = jsonify({"success": False, "error": f"Synology Auth Failed: {login_json.get('error')}"})
+            r.headers["Access-Control-Allow-Origin"] = "*"
+            return r, 400
+
+        sid = login_json["data"]["sid"]
+
+        # 2. Tìm file backup mới nhất trong thư mục nhân viên hoặc thư mục gốc
+        folder_paths = [
+            f"/Kĩ Thuật/backup_km_kithuat/{emp_folder}",
+            "/Kĩ Thuật/backup_km_kithuat"
+        ]
+
+        target_file_path = None
+        target_file_name = None
+
+        for fp in folder_paths:
+            list_url = f"https://{clean_host}:5001/webapi/entry.cgi?api=SYNO.FileStation.List&version=2&method=list&_sid={sid}&folder_path={urllib.parse.quote(fp)}"
+            req_list = urllib.request.Request(list_url, headers={"User-Agent": "Mozilla/5.0"})
+            try:
+                resp_list = urllib.request.urlopen(req_list, context=ctx, timeout=8)
+                list_data = json.loads(resp_list.read().decode("utf-8"))
+                files = list_data.get("data", {}).get("files", [])
+                json_files = [f for f in files if f.get("name", "").endswith(".json")]
+                if json_files:
+                    # Sắp xếp file theo tên (hoặc ngày) giảm dần để lấy bản mới nhất
+                    json_files.sort(key=lambda x: x.get("name", ""), reverse=True)
+                    target_file_path = json_files[0].get("path")
+                    target_file_name = json_files[0].get("name")
+                    break
+            except Exception as e:
+                logger.warning(f"Error listing folder {fp}: {e}")
+
+        if not target_file_path:
+            r = jsonify({"success": False, "error": f"Chưa tìm thấy file sao lưu .json nào cho nhân viên {emp_raw} trên NAS Synology!"})
+            r.headers["Access-Control-Allow-Origin"] = "*"
+            return r, 404
+
+        # 3. Tải nội dung file sao lưu
+        down_url = f"https://{clean_host}:5001/webapi/entry.cgi?api=SYNO.FileStation.Download&version=2&method=download&path={urllib.parse.quote(target_file_path)}&mode=download&_sid={sid}"
+        req_down = urllib.request.Request(down_url, headers={"User-Agent": "Mozilla/5.0"})
+        resp_down = urllib.request.urlopen(req_down, context=ctx, timeout=12)
+        content_str = resp_down.read().decode("utf-8")
+        payload = json.loads(content_str)
+
+        r = jsonify({
+            "success": True,
+            "fileName": target_file_name,
+            "filePath": target_file_path,
+            "payload": payload,
+            "methodUsed": "Synology Cloud Relay (Render 24/7)"
+        })
+        r.headers["Access-Control-Allow-Origin"] = "*"
+        return r, 200
+
+    except Exception as e:
+        logger.error(f"Synology Restore Error: {e}")
         r = jsonify({"success": False, "error": str(e)})
         r.headers["Access-Control-Allow-Origin"] = "*"
         return r, 500
