@@ -15,7 +15,8 @@ import io
 import contextlib
 from io import BytesIO
 import requests
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request, Response
+import ssl
 
 try:
     import pypdf
@@ -239,6 +240,111 @@ user_expenses = load_expenses()
 
 # Flask web app for Render Keep-Alive & Health Checks
 app = Flask(__name__)
+
+@app.route("/api/synology-backup", methods=["POST", "OPTIONS"])
+def synology_backup_relay():
+    # CORS Preflight
+    if request.method == "OPTIONS":
+        resp = Response()
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        return resp, 204
+
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        settings = data.get("settings", {})
+        file_name = data.get("fileName") or f"BACKUP_TECH_{int(time.time())}.json"
+        payload_content = data.get("payload") or data
+
+        user = settings.get("synologyUsername") or "kt"
+        password = settings.get("synologyPassword") or "Abcd1234"
+        raw_host = settings.get("synologyNasHost") or "mtnguyenthanh.synology.me"
+        clean_host = raw_host.replace("https://", "").replace("http://", "").strip("/")
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        # 1. Login to Synology DSM
+        login_url = f"https://{clean_host}:5001/webapi/auth.cgi?api=SYNO.API.Auth&version=3&method=login&account={urllib.parse.quote(user)}&passwd={urllib.parse.quote(password)}&session=FileStation&format=cookie"
+        req = urllib.request.Request(login_url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, context=ctx, timeout=8)
+        login_json = json.loads(resp.read().decode("utf-8"))
+
+        if not login_json.get("success"):
+            err_msg = str(login_json.get("error", "Login failed"))
+            r = jsonify({"success": False, "error": f"Synology Auth Failed: {err_msg}"})
+            r.headers["Access-Control-Allow-Origin"] = "*"
+            return r, 400
+
+        sid = login_json["data"]["sid"]
+        cookie_header = resp.headers.get("Set-Cookie", f"id={sid}")
+
+        # 2. Upload file to /Kĩ Thuật/backup_km_kithuat
+        target_path = "/Kĩ Thuật/backup_km_kithuat"
+        json_bytes = json.dumps(payload_content, ensure_ascii=False, indent=2).encode("utf-8")
+
+        boundary = "----WebKitFormBoundary" + str(int(time.time() * 1000))
+        body = bytearray()
+
+        def add_field(name, val):
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+            body.extend(f"{val}\r\n".encode("utf-8"))
+
+        add_field("api", "SYNO.FileStation.Upload")
+        add_field("version", "2")
+        add_field("method", "upload")
+        add_field("_sid", sid)
+        add_field("path", target_path)
+        add_field("create_parents", "true")
+        add_field("overwrite", "true")
+
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="file"; filename="{file_name}"\r\n'.encode("utf-8"))
+        body.extend(b'Content-Type: application/json\r\n\r\n')
+        body.extend(json_bytes)
+        body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+        upload_url = f"https://{clean_host}:5001/webapi/entry.cgi"
+        req_up = urllib.request.Request(
+            upload_url,
+            data=bytes(body),
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Cookie": cookie_header,
+                "User-Agent": "Mozilla/5.0"
+            }
+        )
+
+        resp_up = urllib.request.urlopen(req_up, context=ctx, timeout=12)
+        upload_res = json.loads(resp_up.read().decode("utf-8"))
+
+        if upload_res.get("success"):
+            r = jsonify({
+                "success": True,
+                "fileName": file_name,
+                "destination": f"{target_path}/",
+                "sizeBytes": len(json_bytes),
+                "methodUsed": "Synology Cloud Relay (Render 24/7)"
+            })
+            r.headers["Access-Control-Allow-Origin"] = "*"
+            return r, 200
+        else:
+            r = jsonify({
+                "success": False,
+                "error": f"Upload Error Code: {upload_res.get('error', {}).get('code')}"
+            })
+            r.headers["Access-Control-Allow-Origin"] = "*"
+            return r, 500
+
+    except Exception as e:
+        logger.error(f"Synology Relay Error: {e}")
+        r = jsonify({"success": False, "error": str(e)})
+        r.headers["Access-Control-Allow-Origin"] = "*"
+        return r, 500
 
 @app.route("/")
 @app.route("/health")
